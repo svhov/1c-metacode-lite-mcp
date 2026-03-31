@@ -170,7 +170,28 @@ def _object_structure(req):
         {"qn": qn},
     )
 
-    return {"object": obj[0] if obj else {}, "children": children}
+    # Add USED_IN: objects that reference this one
+    used_by = run_query(
+        "MATCH (other:MetadataObject)-[:USED_IN]->(mo:MetadataObject) "
+        "WHERE mo.qualified_name = $qn "
+        "RETURN other.name AS name, other.category_name AS category",
+        {"qn": qn},
+    )
+
+    # Add USED_IN: objects this one references
+    uses = run_query(
+        "MATCH (mo:MetadataObject)-[:USED_IN]->(target:MetadataObject) "
+        "WHERE mo.qualified_name = $qn "
+        "RETURN target.name AS name, target.category_name AS category",
+        {"qn": qn},
+    )
+
+    result = {"object": obj[0] if obj else {}, "children": children}
+    if used_by:
+        result["referenced_by"] = used_by
+    if uses:
+        result["references"] = uses
+    return result
 
 
 def _find_qn(req):
@@ -741,12 +762,21 @@ def _find_predefined_by_account_type(req):
 
 def _list_roles_with_access_to_target(req):
     target = req.get("target", _get_name(req))
+    # Try by exact name first, then by CONTAINS for short names
     rows = run_query(
-        "MATCH (role:MetadataObject)-[r:GRANTS_ACCESS_TO]->(target:MetadataObject) "
-        "WHERE target.project_name = $p AND target.name = $target "
-        "RETURN role.name AS role, r.rights AS rights ORDER BY role.name",
-        {"p": PROJECT_NAME, "target": target},
+        "MATCH (role_node:MetadataObject)-[rel:GRANTS_ACCESS_TO]->(target_node:MetadataObject) "
+        "WHERE target_node.name = $target "
+        "RETURN role_node.name AS role, rel.rights AS rights ORDER BY role_node.name",
+        {"target": target},
     )
+    if not rows:
+        rows = run_query(
+            "MATCH (role_node:MetadataObject)-[rel:GRANTS_ACCESS_TO]->(target_node:MetadataObject) "
+            "WHERE target_node.name CONTAINS $target "
+            "RETURN role_node.name AS role, target_node.name AS target, rel.rights AS rights "
+            "ORDER BY role_node.name",
+            {"target": target},
+        )
     return {"roles": rows}
 
 

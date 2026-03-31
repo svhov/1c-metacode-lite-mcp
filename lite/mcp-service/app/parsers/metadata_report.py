@@ -124,6 +124,7 @@ def parse_metadata_report(filepath: str) -> ParsedConfig:
     current_object = None  # Current top-level metadata object
     current_child = None   # Current child (attribute, form, etc.)
     current_child_type = None
+    current_sub_child = None  # Deepest child (e.g., TP attribute)
 
     for i, raw_line in enumerate(lines):
         line = raw_line.rstrip("\r\n")
@@ -183,6 +184,7 @@ def parse_metadata_report(filepath: str) -> ParsedConfig:
                     ).append(child_entry)
                     current_child = child_entry
                     current_child_type = child_type
+                    current_sub_child = None
 
                     # Deeper nesting (e.g., TabularPart attributes)
                     if len(child_parts) >= 4:
@@ -192,6 +194,7 @@ def parse_metadata_report(filepath: str) -> ParsedConfig:
                         sub_type = CHILD_CATEGORY_MAP.get(sub_cat, sub_cat)
                         sub_entry = {"name": sub_name, "properties": {}}
                         child_entry.setdefault("children", []).append(sub_entry)
+                        current_sub_child = sub_entry
                 continue
 
         # --- Property lines (no dash prefix) ---
@@ -209,6 +212,9 @@ def parse_metadata_report(filepath: str) -> ParsedConfig:
             elif depth == 3 and current_object and not current_child:
                 # Object-level property
                 current_object["properties"][key] = val
+            elif depth >= 5 and current_sub_child:
+                # Sub-child property (e.g., TP attribute)
+                current_sub_child["properties"][key] = val
             elif depth >= 4 and current_child:
                 # Child-level property
                 current_child["properties"][key] = val
@@ -233,10 +239,12 @@ def parse_metadata_report(filepath: str) -> ParsedConfig:
             # Store "Тип:" collection as property (join multiple types)
             if coll_key == "Тип" and coll_values:
                 type_val = ", ".join(coll_values)
-                if depth == 3 and current_object and not current_child:
-                    current_object["properties"]["Тип"] = type_val
+                if depth >= 5 and current_sub_child:
+                    current_sub_child["properties"]["Тип"] = type_val
                 elif depth >= 4 and current_child:
                     current_child["properties"]["Тип"] = type_val
+                elif depth == 3 and current_object and not current_child:
+                    current_object["properties"]["Тип"] = type_val
             continue
 
         # Quoted collection values (e.g., '"Роль.АМЕ_ОсновнаяРоль"')

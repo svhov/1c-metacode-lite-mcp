@@ -29,21 +29,27 @@ def handle_search_description(query: str) -> str:
         params = {"p": PROJECT_NAME, "text": text, "limit": limit}
 
         # Case-insensitive search: Memgraph toLower() doesn't handle Cyrillic,
-        # so we search with multiple case variants from Python
-        text_lower = text.lower()
-        text_title = text.capitalize()
-        text_upper = text.upper()
-        params["t1"] = text
-        params["t2"] = text_lower
-        params["t3"] = text_title
-        params["t4"] = text_upper
+        # so we search with multiple case variants from Python.
+        # Also try stem prefix (drop last 1-2 chars) for basic morphology:
+        # "премия" -> also try "преми" to match "Премии", "Премирование"
+        variants = {text, text.lower(), text.capitalize(), text.upper()}
+        if len(text) >= 4:
+            variants.add(text[:-1])            # drop last char
+            variants.add(text[:-1].capitalize())
+            if len(text) >= 5:
+                variants.add(text[:-2])        # drop last 2 chars
+                variants.add(text[:-2].capitalize())
+        variant_list = list(variants)
+        params["variants"] = variant_list
+        # Build OR conditions for each variant
+        name_conds = " OR ".join(f"mo.name CONTAINS v" for _ in variant_list)
+        syn_conds = " OR ".join(f"mo.Synonym CONTAINS v" for _ in variant_list)
+        cmt_conds = " OR ".join(f"mo.Comment CONTAINS v" for _ in variant_list)
+        # Use UNWIND + ANY pattern for Memgraph compatibility
         conditions.append(
-            "(mo.name CONTAINS $t1 OR mo.name CONTAINS $t2 "
-            "OR mo.name CONTAINS $t3 OR mo.name CONTAINS $t4 "
-            "OR (mo.Synonym IS NOT NULL AND (mo.Synonym CONTAINS $t1 OR mo.Synonym CONTAINS $t2 "
-            "OR mo.Synonym CONTAINS $t3)) "
-            "OR (mo.Comment IS NOT NULL AND (mo.Comment CONTAINS $t1 OR mo.Comment CONTAINS $t2 "
-            "OR mo.Comment CONTAINS $t3)))"
+            "ANY(v IN $variants WHERE mo.name CONTAINS v "
+            "OR (mo.Synonym IS NOT NULL AND mo.Synonym CONTAINS v) "
+            "OR (mo.Comment IS NOT NULL AND mo.Comment CONTAINS v))"
         )
 
         if category:
