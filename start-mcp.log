@@ -1,0 +1,93 @@
+
+2026-03-30 22:18:22 | ============================================
+2026-03-30 22:18:22 | Старт поэтапного запуска MCP-сервисов
+2026-03-30 22:18:22 | ============================================
+2026-03-30 22:18:23 | Ожидание 2ч 30мин перед запуском erp_main...
+2026-03-31 00:48:01 | >>> Запуск 1c-metacode-erp_main ...
+ Container 1c-metacode-mcp-1c-neo4j-1 Running 
+ Container 1c-metacode-mcp-1c-metacode-erp_main-1 Creating 
+ Container 1c-metacode-mcp-1c-metacode-erp_main-1 Created 
+ Container 1c-metacode-mcp-1c-neo4j-1 Waiting 
+ Container 1c-metacode-mcp-1c-neo4j-1 Healthy 
+ Container 1c-metacode-mcp-1c-metacode-erp_main-1 Starting 
+ Container 1c-metacode-mcp-1c-metacode-erp_main-1 Started 
+2026-03-31 00:48:02 | OK: 1c-metacode-erp_main запущен
+2026-03-31 00:48:23 | >>> Запуск 1c-metacode-erp_main ...
+ Container 1c-metacode-mcp-1c-neo4j-1 Running 
+ Container 1c-metacode-mcp-1c-metacode-erp_main-1 Running 
+ Container 1c-metacode-mcp-1c-neo4j-1 Waiting 
+ Container 1c-metacode-mcp-1c-neo4j-1 Healthy 
+2026-03-31 00:48:24 | OK: 1c-metacode-erp_main запущен
+2026-03-31 00:48:32 | Статус 1c-metacode-erp_main: Up 30 seconds
+2026-03-31 00:48:32 | HTTP /mcp на порту 6001: 000
+2026-03-31 00:48:32 | Ожидание 3ч 30мин перед запуском ssl3...
+2026-03-31 00:48:54 | Статус 1c-metacode-erp_main: Up 52 seconds
+2026-03-31 00:48:54 | HTTP /mcp на порту 6001: 000
+2026-03-31 00:48:54 | Ожидание 3ч 30мин перед запуском ssl3...
+2026-03-31 04:18:33 | >>> Запуск 1c-metacode-ssl3 ...
+ Container 1c-metacode-mcp-1c-neo4j-1 Running 
+ Container 1c-metacode-mcp-1c-metacode-ssl3-1 Creating 
+ Container 1c-metacode-mcp-1c-metacode-ssl3-1 Created 
+ Container 1c-metacode-mcp-1c-neo4j-1 Waiting 
+ Container 1c-metacode-mcp-1c-neo4j-1 Healthy 
+ Container 1c-metacode-mcp-1c-metacode-ssl3-1 Starting 
+ Container 1c-metacode-mcp-1c-metacode-ssl3-1 Started 
+2026-03-31 04:18:34 | OK: 1c-metacode-ssl3 запущен
+2026-03-31 04:18:55 | >>> Запуск 1c-metacode-ssl3 ...
+ Container 1c-metacode-mcp-1c-neo4j-1 Running 
+ Container 1c-metacode-mcp-1c-metacode-ssl3-1 Running 
+ Container 1c-metacode-mcp-1c-neo4j-1 Waiting 
+ Container 1c-metacode-mcp-1c-neo4j-1 Healthy 
+2026-03-31 04:18:55 | OK: 1c-metacode-ssl3 запущен
+2026-03-31 04:19:04 | Статус 1c-metacode-ssl3: Up 30 seconds
+2026-03-31 04:19:04 | HTTP /mcp на порту 6003: 000
+2026-03-31 04:19:04 | Ожидание 1ч перед запуском do_ame...
+2026-03-31 04:19:25 | Статус 1c-metacode-ssl3: Up 51 seconds
+2026-03-31 04:19:26 | HTTP /mcp на порту 6003: 000
+2026-03-31 04:19:26 | Ожидание 1ч перед запуском do_ame...
+2026-03-31 05:19:04 | >>> Запуск 1c-metacode-do_ame ...
+ Container 1c-metacode-mcp-1c-neo4j-1 Running 
+ Container 1c-metacode-mcp-1c-metacode-do_ame-1 Recreate 
+ Container 1c-metacode-mcp-1c-metacode-do_ame-1 Recreated 
+ Container 1c-metacode-mcp-1c-neo4j-1 Waiting 
+ Container 1c-metacode-mcp-1c-neo4j-1 Healthy 
+ Container 1c-metacode-mcp-1c-metacode-do_ame-1 Starting 
+ Container 1c-metacode-mcp-1c-metacode-do_ame-1 Started 
+2026-03-31 05:19:05 | OK: 1c-metacode-do_ame запущен
+2026-03-31 05:19:26 | >>> Запуск 1c-metacode-do_ame ...
+ Container 1c-metacode-mcp-1c-neo4j-1 Running 
+ Container 1c-metacode-mcp-1c-metacode-do_ame-1 Running 
+ Container 1c-metacode-mcp-1c-neo4j-1 Waiting 
+ Container 1c-metacode-mcp-1c-neo4j-1 Healthy 
+2026-03-31 05:19:26 | OK: 1c-metacode-do_ame запущен
+2026-03-31 05:19:35 | Статус 1c-metacode-do_ame: Up 30 seconds
+2026-03-31 05:19:35 | HTTP /mcp на порту 6005: 000
+2026-03-31 05:19:35 | Ожидание 1ч перед запуском erp_ame_do...
+2026-03-31 05:19:57 | Статус 1c-metacode-do_ame: Up 51 seconds
+2026-03-31 05:19:57 | HTTP /mcp на порту 6005: 000
+2026-03-31 05:19:57 | Ожидание 1ч перед запуском erp_ame_do...
+2026-03-31 06:19:35 | >>> Запуск 1c-metacode-erp_ame_do ...
+ Container 1c-metacode-mcp-1c-neo4j-1 Running 
+ Container 1c-metacode-mcp-1c-metacode-erp_ame_do-1 Creating 
+ Container 1c-metacode-mcp-1c-metacode-erp_ame_do-1 Created 
+ Container 1c-metacode-mcp-1c-neo4j-1 Waiting 
+ Container 1c-metacode-mcp-1c-neo4j-1 Healthy 
+ Container 1c-metacode-mcp-1c-metacode-erp_ame_do-1 Starting 
+ Container 1c-metacode-mcp-1c-metacode-erp_ame_do-1 Started 
+2026-03-31 06:19:36 | OK: 1c-metacode-erp_ame_do запущен
+2026-03-31 06:19:57 | >>> Запуск 1c-metacode-erp_ame_do ...
+ Container 1c-metacode-mcp-1c-neo4j-1 Running 
+ Container 1c-metacode-mcp-1c-metacode-erp_ame_do-1 Running 
+ Container 1c-metacode-mcp-1c-neo4j-1 Waiting 
+ Container 1c-metacode-mcp-1c-neo4j-1 Healthy 
+2026-03-31 06:19:58 | OK: 1c-metacode-erp_ame_do запущен
+2026-03-31 06:20:07 | Статус 1c-metacode-erp_ame_do: Up 30 seconds
+2026-03-31 06:20:07 | HTTP /mcp на порту 6002: 000
+2026-03-31 06:20:07 | ============================================
+2026-03-31 06:20:07 | Все сервисы запущены!
+2026-03-31 06:20:07 | ============================================
+2026-03-31 06:20:28 | Статус 1c-metacode-erp_ame_do: Up 51 seconds
+2026-03-31 06:20:28 | HTTP /mcp на порту 6002: 000
+2026-03-31 06:20:28 | ============================================
+2026-03-31 06:20:28 | Все сервисы запущены!
+2026-03-31 06:20:28 | ============================================

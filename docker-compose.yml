@@ -1,0 +1,235 @@
+
+name: 1c-metacode-mcp
+services:
+###########################################
+## NEO4J Database
+###########################################
+  1c-neo4j:
+    image: neo4j:5.26
+    restart: unless-stopped
+    ports:
+      - "7474:7474"   # Neo4j Browser (optional)
+      - "7687:7687"   # Bolt
+    volumes:
+      - 1c_neo4j_data:/data
+    environment:
+      - NEO4J_AUTH=neo4j/${NEO4J_PASSWORD}
+      - NEO4J_client_allow__telemetry=false
+      - NEO4J_dbms_memory_transaction_total_max=4096m
+      - NEO4J_db_transaction_timeout=600s
+      - NEO4J_server_memory_heap_max__size=1024m
+      - JAVA_TOOL_OPTIONS=-Xint
+    healthcheck:
+      test: ["CMD-SHELL", "cypher-shell -a bolt://localhost:7687 -u neo4j -p \"${NEO4J_PASSWORD}\" 'RETURN 1' || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+###########################################
+## Project1 erp_main (Основная конфигурация erp)
+###########################################
+  1c-metacode-erp_main:
+    image: roctup/1c-mcp-metacode
+    restart: unless-stopped
+    ports:
+      - "6001:6001"
+    volumes:
+      - C:\sukhov_ae\1c-metacode-mcp\erp_main:/app/data
+    environment:
+      - PROJECT_NAME=erp_main
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD}
+      - NEO4J_URI=bolt://1c-neo4j:7687
+      - OPENAI_API_BASE=${OPENAI_API_BASE}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_MODEL=${OPENAI_MODEL}
+      - EMBEDDING_API_BASE=${EMBEDDING_API_BASE}
+      - EMBEDDING_API_KEY=${EMBEDDING_API_KEY}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL}
+      - ENABLE_ROUTINE_DESCRIPTION_EMBEDDING=${ENABLE_ROUTINE_DESCRIPTION_EMBEDDING:-false}
+      - ENABLE_METADATA_DESCRIPTION_EMBEDDING=${ENABLE_METADATA_DESCRIPTION_EMBEDDING:-false}
+      - MCP_USE_SSE=${MCP_USE_SSE}
+      - FULL_METADATA_RELOAD=false
+      - LOAD_PREDEFINED_VALUES=${LOAD_PREDEFINED_VALUES:-true}
+      - LOAD_FORMS_FROM_XML=${LOAD_FORMS_FROM_XML:-true}
+      - LOAD_ROLE_RIGHTS=${LOAD_ROLE_RIGHTS:-true}
+      - LOAD_BSL_SIGNATURES=${LOAD_BSL_SIGNATURES:-true}
+      - LOAD_EVENT_SUBSCRIPTIONS=${LOAD_EVENT_SUBSCRIPTIONS:-true}
+      - LOAD_HELP_FROM_HTML=${LOAD_HELP_FROM_HTML:-true}
+      - TEMPLATE_MODE_ENABLED=${TEMPLATE_MODE_ENABLED:-true}
+      - TEMPLATE_MODE_ONLY=${TEMPLATE_MODE_ONLY:-true}
+    depends_on:
+      1c-neo4j:
+        condition: service_healthy
+
+###########################################
+## Project2 erp_ame_do (Расширение АМЕ ДО erp)
+###########################################
+  1c-metacode-erp_ame_do:
+    image: roctup/1c-mcp-metacode
+    restart: unless-stopped
+    ports:
+      - "6002:6001"
+    volumes:
+      - C:\sukhov_ae\1c-metacode-mcp\erp_ame_do:/app/data
+    environment:
+      - PROJECT_NAME=erp_ame_do
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD}
+      - NEO4J_URI=bolt://1c-neo4j:7687
+      - OPENAI_API_BASE=${OPENAI_API_BASE}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_MODEL=${OPENAI_MODEL}
+      - EMBEDDING_API_BASE=${EMBEDDING_API_BASE}
+      - EMBEDDING_API_KEY=${EMBEDDING_API_KEY}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL}
+      - ENABLE_ROUTINE_DESCRIPTION_EMBEDDING=${ENABLE_ROUTINE_DESCRIPTION_EMBEDDING:-false}
+      - ENABLE_METADATA_DESCRIPTION_EMBEDDING=${ENABLE_METADATA_DESCRIPTION_EMBEDDING:-false}
+      - MCP_USE_SSE=${MCP_USE_SSE}
+      - FULL_METADATA_RELOAD=false
+      - LOAD_PREDEFINED_VALUES=${LOAD_PREDEFINED_VALUES:-true}
+      - LOAD_FORMS_FROM_XML=${LOAD_FORMS_FROM_XML:-true}
+      - LOAD_ROLE_RIGHTS=${LOAD_ROLE_RIGHTS:-true}
+      - LOAD_BSL_SIGNATURES=${LOAD_BSL_SIGNATURES:-true}
+      - LOAD_EVENT_SUBSCRIPTIONS=${LOAD_EVENT_SUBSCRIPTIONS:-true}
+      - LOAD_HELP_FROM_HTML=${LOAD_HELP_FROM_HTML:-true}
+      - TEMPLATE_MODE_ENABLED=${TEMPLATE_MODE_ENABLED:-true}
+      - TEMPLATE_MODE_ONLY=${TEMPLATE_MODE_ONLY:-true}
+    depends_on:
+      1c-neo4j:
+        condition: service_healthy
+
+###########################################
+## Project3 ssl3 (Библиотека стандартных подсистем 3.11 ...)
+###########################################
+  1c-metacode-ssl3:
+    image: roctup/1c-mcp-metacode
+    restart: unless-stopped
+    ports:
+      - "6003:6001"
+    volumes:
+      - C:\sukhov_ae\1c-metacode-mcp\ssl3:/app/data
+    environment:
+      - PROJECT_NAME=ssl3
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD}
+      - NEO4J_URI=bolt://1c-neo4j:7687
+      - OPENAI_API_BASE=${OPENAI_API_BASE}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_MODEL=${OPENAI_MODEL}
+      - EMBEDDING_API_BASE=${EMBEDDING_API_BASE}
+      - EMBEDDING_API_KEY=${EMBEDDING_API_KEY}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL}
+      - ENABLE_ROUTINE_DESCRIPTION_EMBEDDING=${ENABLE_ROUTINE_DESCRIPTION_EMBEDDING:-false}
+      - ENABLE_METADATA_DESCRIPTION_EMBEDDING=${ENABLE_METADATA_DESCRIPTION_EMBEDDING:-false}
+      - MCP_USE_SSE=${MCP_USE_SSE}
+      - FULL_METADATA_RELOAD=false
+      - LOAD_PREDEFINED_VALUES=${LOAD_PREDEFINED_VALUES:-true}
+      - LOAD_FORMS_FROM_XML=${LOAD_FORMS_FROM_XML:-true}
+      - LOAD_ROLE_RIGHTS=${LOAD_ROLE_RIGHTS:-true}
+      - LOAD_BSL_SIGNATURES=${LOAD_BSL_SIGNATURES:-true}
+      - LOAD_EVENT_SUBSCRIPTIONS=${LOAD_EVENT_SUBSCRIPTIONS:-true}
+      - LOAD_HELP_FROM_HTML=${LOAD_HELP_FROM_HTML:-true}
+      - TEMPLATE_MODE_ENABLED=${TEMPLATE_MODE_ENABLED:-true}
+      - TEMPLATE_MODE_ONLY=${TEMPLATE_MODE_ONLY:-true}
+    depends_on:
+      1c-neo4j:
+        condition: service_healthy
+
+###########################################
+## Project4 do_main (Основная конфигурация Документооборота ...)
+###########################################
+  1c-metacode-do_main:
+    image: roctup/1c-mcp-metacode
+    restart: unless-stopped
+    ports:
+      - "6004:6001"
+    volumes:
+      - C:\sukhov_ae\1c-metacode-mcp\do_main:/app/data
+    environment:
+      - PROJECT_NAME=do_main
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD}
+      - NEO4J_URI=bolt://1c-neo4j:7687
+      - OPENAI_API_BASE=${OPENAI_API_BASE}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_MODEL=${OPENAI_MODEL}
+      - EMBEDDING_API_BASE=${EMBEDDING_API_BASE}
+      - EMBEDDING_API_KEY=${EMBEDDING_API_KEY}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL}
+      - ENABLE_ROUTINE_DESCRIPTION_EMBEDDING=${ENABLE_ROUTINE_DESCRIPTION_EMBEDDING:-false}
+      - ENABLE_METADATA_DESCRIPTION_EMBEDDING=${ENABLE_METADATA_DESCRIPTION_EMBEDDING:-false}
+      - MCP_USE_SSE=${MCP_USE_SSE}
+      - FULL_METADATA_RELOAD=true
+      - LOAD_PREDEFINED_VALUES=${LOAD_PREDEFINED_VALUES:-true}
+      - LOAD_FORMS_FROM_XML=${LOAD_FORMS_FROM_XML:-true}
+      - LOAD_ROLE_RIGHTS=${LOAD_ROLE_RIGHTS:-true}
+      - LOAD_BSL_SIGNATURES=${LOAD_BSL_SIGNATURES:-true}
+      - LOAD_EVENT_SUBSCRIPTIONS=${LOAD_EVENT_SUBSCRIPTIONS:-true}
+      - LOAD_HELP_FROM_HTML=${LOAD_HELP_FROM_HTML:-true}
+      - TEMPLATE_MODE_ENABLED=${TEMPLATE_MODE_ENABLED:-true}
+      - TEMPLATE_MODE_ONLY=${TEMPLATE_MODE_ONLY:-true}
+    depends_on:
+      1c-neo4j:
+        condition: service_healthy
+
+###########################################
+## Project5 do_main (Конфигурация расширения АМЕ Документооборота ...)
+###########################################
+  1c-metacode-do_ame:
+    image: roctup/1c-mcp-metacode
+    restart: unless-stopped
+    ports:
+      - "6005:6001"  # MCP server (project 2) -> host:6011
+    # Host directories are mounted into the container's /app/data directory.
+    # The application expects to find 'metadata' and an optional 'code' subdirectory.
+    #
+    # Example 1: Single project directory from host
+    #   ./data/prj2/metadata -> /app/data/metadata
+    #   ./data/prj2/code     -> /app/data/code
+    #
+    # volumes:
+    #   - ./data/prj2:/app/data
+    #
+    # Example 2: Separate host directories for metadata and code 
+    #   D:\metadata\prj2 -> /app/data/metadata
+    #   E:\sources\prj2  -> /app/data/code
+    #
+    # volumes:
+    #   - D:\metadata\prj2:/app/data/metadata
+    #   - E:\sources\prj2:/app/data/code
+    volumes:
+      - C:\sukhov_ae\1c-metacode-mcp\do_ame:/app/data
+    environment:
+    # Project identity (unique per app)
+      - PROJECT_NAME=do_ame
+    # Shared Neo4j DB     
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD}
+      - NEO4J_URI=bolt://1c-neo4j:7687      
+    # OpenAI / LLM
+      - OPENAI_API_BASE=${OPENAI_API_BASE}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}      
+      - OPENAI_MODEL=${OPENAI_MODEL}
+    # Embedding API
+      - EMBEDDING_API_BASE=${EMBEDDING_API_BASE}
+      - EMBEDDING_API_KEY=${EMBEDDING_API_KEY}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL}
+      - ENABLE_ROUTINE_DESCRIPTION_EMBEDDING=${ENABLE_ROUTINE_DESCRIPTION_EMBEDDING:-false}
+      - ENABLE_METADATA_DESCRIPTION_EMBEDDING=${ENABLE_METADATA_DESCRIPTION_EMBEDDING:-false}
+    # MCP server      
+      - MCP_USE_SSE=${MCP_USE_SSE}
+    # Load toggles (per app). Note: FULL_METADATA_RELOAD=true clears ONLY the current PROJECT_NAME data (project-scoped), not the entire DB.
+      - FULL_METADATA_RELOAD=false
+      - LOAD_PREDEFINED_VALUES=${LOAD_PREDEFINED_VALUES:-true}
+      - LOAD_FORMS_FROM_XML=${LOAD_FORMS_FROM_XML:-true}
+      - LOAD_ROLE_RIGHTS=${LOAD_ROLE_RIGHTS:-true}
+      - LOAD_BSL_SIGNATURES=${LOAD_BSL_SIGNATURES:-true}
+      - LOAD_EVENT_SUBSCRIPTIONS=${LOAD_EVENT_SUBSCRIPTIONS:-true}
+      - LOAD_HELP_FROM_HTML=${LOAD_HELP_FROM_HTML:-true}
+    # Template/LLM mode
+      - TEMPLATE_MODE_ENABLED=${TEMPLATE_MODE_ENABLED:-true}
+      - TEMPLATE_MODE_ONLY=${TEMPLATE_MODE_ONLY:-true}
+    depends_on:
+      1c-neo4j:
+        condition: service_healthy
+
+volumes:
+  1c_neo4j_data:
+    driver: local
