@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+.venv/
+venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Docker
+*.log
+
+# Environment / secrets
+.env
+!.env.example
+
+# Data directories (mounted volumes)
+data/
+
+# Legacy (non-lite) files
+docker-compose.yml
+!lite/docker-compose.yml
+docker-compose.example.yml
+start-mcp-services.sh
+start-mcp.log
+PLAN-lightweight-mcp.md
+MCP_SERVER_CAPABILITIES.md
+.env.example

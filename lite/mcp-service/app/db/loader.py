@@ -147,6 +147,11 @@ def _load_metadata(config):
     _load_children(config)
 
 
+import re as _re
+
+_VALID_CYPHER_LABEL = _re.compile(r"^[A-Za-z_]\w*$")
+
+
 def _load_children(config):
     """Load child nodes (attributes, tabular parts, etc.)."""
     for obj in config.objects:
@@ -154,6 +159,9 @@ def _load_children(config):
         children = obj.get("children", {})
 
         for child_type, child_list in children.items():
+            if not _VALID_CYPHER_LABEL.match(child_type):
+                log.warning("Skipping invalid child_type: %r", child_type)
+                continue
             label = child_type  # Attribute, Resource, Dimension, etc.
             rel = _child_rel(child_type)
 
@@ -277,7 +285,7 @@ def _load_routines(routines: list[dict]):
             "is_ssl_api": r["is_ssl_api"],
             "signature": r["signature"],
             "params_text": r["params_text"],
-            "param_names": r["param_names"],
+            "param_names": ", ".join(r["param_names"]) if isinstance(r["param_names"], list) else r["param_names"],
             "body": r["body"],
             "line": r["line"],
             "file_path": r["file_path"],

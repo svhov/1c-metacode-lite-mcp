@@ -1,292 +1,382 @@
-# 1C Metacode MCP Server
+<p align="center">
+  <img src="https://img.shields.io/badge/1C:Предприятие-MCP_Сервер-yellow?style=for-the-badge&logo=1c&logoColor=white" alt="1C MCP" />
+  <img src="https://img.shields.io/badge/Memgraph-Графовая_БД-6B4FBB?style=for-the-badge&logo=memgraph&logoColor=white" alt="Memgraph" />
+  <img src="https://img.shields.io/badge/Python-3.12-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python" />
+  <img src="https://img.shields.io/badge/Docker-Compose-2496ED?style=for-the-badge&logo=docker&logoColor=white" alt="Docker" />
+</p>
 
-Загружает метаданные и код конфигураций 1С в графовую базу данных и предоставляет инструменты MCP для запросов по графу.
+<h1 align="center">1C Metacode MCP Lite</h1>
 
-#### Основные возможности
+<p align="center">
+  <b>Легковесный MCP-сервер для графа метаданных 1С:Предприятие</b><br/>
+  <sub>Memgraph + Python FastMCP &mdash; в 3 раза меньше RAM чем Neo4j</sub>
+</p>
 
-- Загрузка всех метаданных конфигураций 1С в графовую базу Neo4j из отчета по конфигурации. 
-- Загрузка данных управляемых форм - реквизиты, элементы формы, события, команды. Привязка событий форм и элементов, команд к обработчикам.
-- Загрузка предопределенных значений и прав ролей.
-- Загрузка подписок на события и привязка к обработчикам.
-- Загрузка сигнатур процедур/функций из всех модулей (включая модуль формы обычных форм), формирование графа вызовов.
-- Загрузка описания и тела всех процедур и функций (включая модуль формы обычных форм) с полнотекстовым или гибридным поиском по описанию.
-- Широкая связность объектов метаданных: в реквизитах, в элементах управлениях формы, в регистрах накопления/сведений, в правах доступа. 
-- MCP инструменты: search_metadata, search_metadata_by_description, search_code 
-- Поддержка загрузки и поиска информации по несколким конфигурациям (проектам). При поиске не нужно указывать в каком проекте искать. Система автоматически фильтрует. 
-- Возможность осуществлять поиск как с помощью LLM (режим агента, который переводить запрос на естественом языке в cypher запрос), так и без LLM (поиск по шаблонам). Возможен так же гибридный режим. Большинство информации может быть найдено по шаблонам. 
+<p align="center">
+  <a href="https://www.youtube.com/@svhovbase">
+    <img src="https://img.shields.io/badge/YouTube-@svhovbase-FF0000?style=for-the-badge&logo=youtube&logoColor=white" alt="YouTube" />
+  </a>
+</p>
 
+---
 
-#### Структура данных
+## Что это?
 
-```mermaid
-graph TB
-    %% Компактная вертикальная структура
-    Project(["Project<br/>Проект"]) -->|"contains"| Configuration(["Configuration<br/>Конфигурация"])
-    Configuration -->|"has"| MetadataCategory(["MetadataCategory<br/>Категория метаданных"])
-    MetadataCategory -->|"contains"| MetadataObject(["MetadataObject<br/>Объект метаданных"])
-    
-    %% Формы и интерфейс (левая колонка)
-    MetadataObject -->|"HAS_FORM"| Form(["Form<br/>Форма"])
-    Form -->|"HAS_CONTROL"| FormControl(["FormControl<br/>Элемент формы"])
-    Form -->|"HAS_EVENT"| FormEvent(["FormEvent<br/>Событие формы"])
-    Form -->|"HAS_FORM_ATTRIBUTE"| FormAttribute(["FormAttribute<br/>Атрибут формы"])
-    FormControl -->|"HAS_EVENT"| FormControlEvent(["FormEvent<br/>Событие элемента"])
-    FormEvent -->|"HAS_HANDLER"| EventHandler(["Routine<br/>Обработчик события"])
-    FormControlEvent -->|"HAS_HANDLER"| ControlEventHandler(["Routine<br/>Обработчик события"])
-    
-    %% Данные и атрибуты (правая колонка)
-    MetadataObject -->|"HAS_ATTRIBUTE"| Attribute(["Attribute<br/>Атрибут"])
-    MetadataObject -->|"HAS_TABULAR_PART"| TabularPart(["TabularPart<br/>Табличная часть"])
-    MetadataObject -->|"HAS_RESOURCE"| Resource(["Resource<br/>Ресурс"])
-    MetadataObject -->|"HAS_DIMENSION"| Dimension(["Dimension<br/>Измерение"])
-    TabularPart -->|"HAS_ATTRIBUTE"| TabularAttribute(["Attribute<br/>Атрибут табл. части"])
-    
-    %% Связи и зависимости (нижняя секция)
-    MetadataObject -->|"USED_IN"| UsedInTarget(["Target Object<br/>Целевой объект"])
-    MetadataObject -->|"DO_MOVEMENTS_IN"| RegisterObject(["Register<br/>Регистр"])
-    MetadataObject -->|"GRANTS_ACCESS_TO"| AccessTarget(["Access Target<br/>Цель доступа"])
-    
-    %% Модули и код (вертикальная цепочка)
-    MetadataObject -->|"HAS_MODULE"| Module(["Module<br/>Модуль"])
-    Module -->|"DECLARES"| Routine(["Routine<br/>Процедура/Функция"])
-    Routine -->|"CALLS"| CalledRoutine(["Called Routine<br/>Вызываемая процедура"])
-    
-    %% Дополнительные компоненты (компактно)
-    MetadataObject -->|"HAS_COMMAND"| Command(["Command<br/>Команда"])
-    MetadataObject -->|"HAS_URL_TEMPLATE"| UrlTemplate(["UrlTemplate<br/>Шаблон URL"])
-    MetadataObject -->|"HAS_EVENT_SUBSCRIPTION"| EventSubscription(["EventSubscription<br/>Подписка на событие"])
-    MetadataObject -->|"HAS_PREDEFINED"| PredefinedItem(["PredefinedItem<br/>Предопределенный элемент"])
-    
-    %% Связи HTTP и форм (компактно)
-    UrlTemplate -->|"HAS_URL_METHOD"| UrlMethod(["UrlMethod<br/>Метод URL"])
-    UrlMethod -->|"HAS_HANDLER"| UrlHandler(["Routine<br/>Обработчик HTTP"])
-    FormControl -->|"BINDS_TO"| BindTarget(["Bind Target<br/>Цель связывания"])
-    FormControl -->|"LINKS_TO_COMMAND"| LinkedCommand(["Command<br/>Команда"])
-    
-    %% Новые добавления: дополнительные сущности и связи
-    MetadataObject -->|"HAS_LAYOUT"| Layout(["Layout<br/>Макет"])
-    MetadataObject -->|"HAS_CHARACTERISTIC"| Characteristic(["Characteristic<br/>Характеристика"])
-    MetadataObject -->|"HAS_ENUM_VALUE"| EnumValue(["EnumValue<br/>ЗначениеПеречисления"])
-    MetadataObject -->|"HAS_GRAPH"| JournalGraph(["JournalGraph<br/>Граф журнала"])
-    MetadataObject -->|"HAS_ACCOUNTING_FLAG"| AccountingFlag(["AccountingFlag<br/>ПризнакУчета"])
-    MetadataObject -->|"HAS_DIMENSION_ACCOUNTING_FLAG"| DimensionAccountingFlag(["DimensionAccountingFlag<br/>ПризнакУчетаСубконто"])
-    MetadataObject -->|"CONTAINS_OBJECT"| SubsystemChild(["MetadataObject<br/>Дочерний объект<br/>(подсистемы)"])
-    PredefinedItem -->|"HAS_CHILD"| PredefinedChild(["PredefinedItem<br/>Дочерний элемент"])
-    FormControl -->|"HAS_CHILD"| FormControlChild(["FormControl<br/>Дочерний элемент"])
-    Form -->|"HAS_COMMAND"| FormCommand(["Command<br/>Команда формы"])
-    EventSubscription -->|"HAS_HANDLER"| EventSubHandler(["Routine<br/>Обработчик подписки"])
-    Command -->|"HAS_HANDLER"| CommandHandler(["Routine<br/>Обработчик команды"])
-    FormCommand -->|"HAS_HANDLER"| FormCommandHandler(["Routine<br/>Обработчик команды формы"])
-    
-    %% Уникальные стили для каждого типа узла (упрощено, без лишних подтипов)
-    classDef projectClass fill:#FF6B6B,stroke:#C92A2A,stroke-width:2px,color:#FFFFFF
-    classDef configClass fill:#4ECDC4,stroke:#26A69A,stroke-width:2px,color:#FFFFFF
-    classDef categoryClass fill:#45B7D1,stroke:#1976D2,stroke-width:2px,color:#FFFFFF
-    classDef objectClass fill:#96CEB4,stroke:#388E3C,stroke-width:2px,color:#FFFFFF
-    classDef formClass fill:#FFEAA7,stroke:#FD8D3C,stroke-width:2px,color:#000000
-    classDef formControlClass fill:#AED6F1,stroke:#3498DB,stroke-width:2px,color:#FFFFFF
-    classDef formEventClass fill:#FF69B4,stroke:#C2185B,stroke-width:2px,color:#FFFFFF
-    classDef formAttrClass fill:#A3E4D7,stroke:#1ABC9C,stroke-width:2px,color:#000000
-    classDef attributeClass fill:#85C1E9,stroke:#2980B9,stroke-width:2px,color:#FFFFFF
-    classDef tabularClass fill:#F7DC6F,stroke:#F39C12,stroke-width:2px,color:#000000
-    classDef resourceClass fill:#F8C471,stroke:#E67E22,stroke-width:2px,color:#000000
-    classDef dimensionClass fill:#82E0AA,stroke:#27AE60,stroke-width:2px,color:#FFFFFF
-    classDef targetClass fill:#CACFD2,stroke:#7F8C8D,stroke-width:2px,color:#000000
-    classDef moduleClass fill:#98D8C8,stroke:#16A085,stroke-width:2px,color:#FFFFFF
-    classDef routineClass fill:#F1948A,stroke:#E74C3C,stroke-width:2px,color:#FFFFFF
-    classDef commandClass fill:#E1BEE7,stroke:#9C27B0,stroke-width:2px,color:#FFFFFF
-    classDef urlTemplateClass fill:#F9E79F,stroke:#F1C40F,stroke-width:2px,color:#000000
-    classDef urlMethodClass fill:#D98880,stroke:#CD6155,stroke-width:2px,color:#FFFFFF
-    classDef eventSubClass fill:#AEB6BF,stroke:#5D6D7E,stroke-width:2px,color:#FFFFFF
-    classDef predefinedClass fill:#BB8FCE,stroke:#8E44AD,stroke-width:2px,color:#FFFFFF
-    classDef bindTargetClass fill:#D5DBDB,stroke:#BDC3C7,stroke-width:2px,color:#000000
-    classDef layoutClass fill:#F0E68C,stroke:#DAA520,stroke-width:2px,color:#000000
-    classDef characteristicClass fill:#DEB887,stroke:#CD853F,stroke-width:2px,color:#000000
-    classDef enumValueClass fill:#FFA07A,stroke:#FF6347,stroke-width:2px,color:#FFFFFF
-    classDef journalGraphClass fill:#20B2AA,stroke:#008B8B,stroke-width:2px,color:#FFFFFF
-    classDef accountingFlagClass fill:#87CEEB,stroke:#4682B4,stroke-width:2px,color:#FFFFFF
-    classDef dimensionAccountingFlagClass fill:#DDA0DD,stroke:#BA55D3,stroke-width:2px,color:#FFFFFF
-    classDef subsystemChildClass fill:#A8E6CF,stroke:#3D9970,stroke-width:2px,color:#FFFFFF
-    classDef formControlChildClass fill:#B3E5FC,stroke:#03A9F4,stroke-width:2px,color:#FFFFFF
-    classDef tabularAttributeClass fill:#90CAF9,stroke:#2196F3,stroke-width:2px,color:#FFFFFF
-    
-    %% Применение цветов (упрощено)
-    class Project projectClass
-    class Configuration configClass
-    class MetadataCategory categoryClass
-    class MetadataObject,SubsystemChild subsystemChildClass
-    class Form formClass
-    class FormControl,FormControlChild formControlChildClass
-    class FormEvent formEventClass
-    class FormAttribute formAttrClass
-    class Attribute,TabularAttribute tabularAttributeClass
-    class TabularPart tabularClass
-    class Resource resourceClass
-    class Dimension dimensionClass
-    class UsedInTarget,RegisterObject,AccessTarget targetClass
-    class Module moduleClass
-    class Routine,CalledRoutine,EventHandler,ControlEventHandler,UrlHandler,EventSubHandler,CommandHandler,FormCommandHandler routineClass
-    class Command,FormCommand,LinkedCommand commandClass
-    class UrlTemplate urlTemplateClass
-    class UrlMethod urlMethodClass
-    class EventSubscription eventSubClass
-    class PredefinedItem,PredefinedChild predefinedClass
-    class BindTarget bindTargetClass
-    class Layout layoutClass
-    class Characteristic characteristicClass
-    class EnumValue enumValueClass
-    class JournalGraph journalGraphClass
-    class AccountingFlag accountingFlagClass
-    class DimensionAccountingFlag dimensionAccountingFlagClass
+MCP-сервер, который загружает **метаданные конфигурации 1С:Предприятие** в **графовую базу данных** и предоставляет инструменты для AI-ассистентов (Claude Code, Cursor, Windsurf и др.) через [Model Context Protocol](https://modelcontextprotocol.io/).
+
+Ваш AI-ассистент получает **полное структурное знание** о конфигурации 1С:
+
+- Все объекты метаданных (справочники, документы, регистры, перечисления и т.д.)
+- Реквизиты, ресурсы, измерения с типами
+- Формы, элементы управления, события, привязки
+- BSL-код: процедуры, функции, сигнатуры, граф вызовов
+- Роли и права доступа
+- Перекрёстные ссылки между объектами (USED_IN)
+- Предопределённые элементы
+
+---
+
+## Почему Lite? Сравнение RAM с Neo4j
+
+Оригинальный подход использует **Neo4j** (графовая БД на JVM). На типичных машинах это означает:
+
+| Компонент | Стек Neo4j | Lite (Memgraph) | Экономия |
+|:----------|:----------:|:---------------:|:--------:|
+| Графовая БД | **1200 -- 1500 МБ** | **100 -- 500 МБ** | 3 -- 5x |
+| 1 MCP-сервис | 200 -- 400 МБ | 80 -- 150 МБ | 2 -- 3x |
+| **2 проекта + БД** | **~2500 МБ** | **~600 -- 1000 МБ** | **2.5x** |
+| **5 проектов + БД** | **~3500 МБ** | **~1000 -- 1500 МБ** | **2.5x** |
+
+### Скорость запуска
+
+| Этап | Стек Neo4j | Lite |
+|:-----|:----------:|:----:|
+| БД готова | 30 -- 45 сек | **2 -- 5 сек** |
+| Загрузка маленькой конфигурации (361 объект) | ~30 сек | **6 сек** |
+| Загрузка большой конфигурации (8000+ объектов) | 5 -- 20 мин | **1 -- 3 мин** |
+| MCP-сервер принимает запросы | после полной загрузки | **мгновенно** (загрузка в фоне) |
+
+### Стабильность
+
+| Проблема | Стек Neo4j | Lite |
+|:---------|:----------:|:----:|
+| JVM crash (`assembler_x86.cpp`) | Бывает на некоторых хостах | **Нет JVM вообще** |
+| `docker stop` зависает после краша | Часто | **Никогда** |
+| Transaction timeout при нагрузке | При загрузке 5 сервисов | **Нет** (нативный C++) |
+| Требуется `-Xint` (без JIT) | Да, замедляет всё | **Не нужен** |
+| Строгий порядок запуска обязателен | Да, поэтапно | **Нет, можно все сразу** |
+
+---
+
+## Архитектура
 
 ```
+                  Memgraph (bolt://7687)
+                        |
+       +--------+-------+-------+--------+
+       |        |       |       |        |
+   erp_main  erp_ame  ssl3  do_main  do_ame
+    :6001     :6002   :6003  :6004   :6005
+       (Python FastMCP, SSE транспорт)
+```
 
+- **Memgraph** -- графовая БД (Bolt-протокол, Cypher-запросы, совместима с Neo4j-драйвером)
+- **MCP-сервисы** -- Python 3.12 + FastMCP, SSE-транспорт
+- Все проекты используют один Memgraph, изолированы по `project_name`
 
-#### Быстрый старт
+---
 
-- Docker и Docker Compose
-- Свободные порты 7474/7687 (Neo4j) и 6001 (MCP)
+## Быстрый старт
 
-1. Подготовьте .env
+### 1. Подготовьте данные
 
-   Скопируйте пример и заполните значения (минимум пароль Neo4j):
-   
-   Обязательно задайте пароль Neo4j
-    NEO4J_PASSWORD=...
-   
-   В файле .env указываются значение, которые общие для всех контейнеров. 
-   Значения, которые различаются для каждого контейнера лучше указывать непосредственно в docker-compose.yml
-
-
-2. Подготовьте docker-compose.yml
-
-   Скопируйте пример docker-compose.example.yml в туже папку где у вас файл .env и переименуйте в docker-compose.yml 
-   
-   Задайте PROJECT_NAME в сервисе 1c-metacode-prj1 (можно переименовать название сервиса как нравится) 
-   Если у вас только один проект, то второй сервис 1c-metacode-prj2 можно удалить полностью
-   Если нужно больше двух то продублируйте секцию сервиса и обязательно задайте  другой порт на хосте ( меняем только первый порт в этой строке "6001:6001")  и другой PROJECT_NAME
-
-
-3. Разместите данные
-
-   В корне папки где располагаются файлы .env и docker-compose.yml  создайте структуру для монтирования в контейнер:
-   
-   - ./data/prj1/metadata — Выгрузка отчет по конфигурации в формате .txt (в папке должен быть только один txt файл). В конфигураторе Конфигурация -> Отчет по конфигурации (в текстовый файл, Вся конфигурация)
-   - ./data/prj1/code — Выгрузка конфигурации в файлы. В конфигураторе Конфигурация -> Выгрузить конфигурацию в файлы (XML-файлы)
-   
-   Аналогично по другим проектам:
-   
-   - ./data/prj2/metadata 
-   - ./data/prj2/code
-
-4. Запуск
+Каждому проекту нужна директория с:
 
 ```
+ваш-проект/
+  metadata/
+    ОтчетПоКонфигурации.txt     # Отчет по конфигурации (UTF-16 или UTF-8)
+  code/
+    ConfigDumpInfo.xml            # GUID-маппинг (опционально)
+    ОбщиеМодули/                  # BSL исходники
+    Справочники/
+    Документы/
+    ...
+```
+
+> Экспорт отчёта по конфигурации из Конфигуратора 1С:
+> **Конфигурация -> Отчёт по конфигурации** (выбрать все объекты, сохранить как `.txt`)
+
+### 2. Укажите путь к данным
+
+Отредактируйте `lite/docker-compose.yml` -- замените `/path/to/erp_main` на реальный путь:
+
+```yaml
+volumes:
+  - /path/to/erp_main:/app/data
+```
+
+> **Для Windows**: используйте локальные пути типа `C:\1c-data\erp_main`, НЕ UNC-пути.
+
+### 3. Запуск
+
+```bash
+cd lite/
 docker compose up -d
 ```
 
-#### Сервисы
+Всё. Memgraph стартует за ~3 секунды, MCP-сервер начинает принимать запросы мгновенно, данные загружаются в фоне.
 
-- Neo4j: http://localhost:7474 (логин neo4j / пароль из NEO4J_PASSWORD)
-- Bolt: bolt://localhost:7687
-- MCP сервер: http://localhost:6001/mcp (и другие порты, указанные в docker-compose.yml)
+### 4. Проверка
 
-#### Логи приложения
+```bash
+# Проверить что контейнеры запущены
+docker ps
 
-```
-docker compose logs -f 1c-metacode-prj1
-```
-
-#### Первичный запуск
-
-- Приложение создаст индексы в Neo4j
-- Проведёт загрузку метаданных из ./data/metadata/*.txt
-- При включённых флагах — просканирует ./data/code и догрузит формы, предопределённые значения, права, подписки на события, модули с процедурами и функциями
-- Загрузка всех данных (без векторной индексации) занимает около 30 минут для типовой конфигурации Бухгалтерия (может увеличиться если слабый компьютер)
-- При включенной векторной индексации она запускается в фоне, после загрузки всех данных. MCP сервер во время векторной индексации доступен для запросов. 
-- Векторная индексация описаний метадананных и процедур/функций занимает около 30 минут для типовой конфигурации Бухгалтерия с использованием модели Qwen3-Embedding-4B_Q8  на 5070Ti   
-- Для загрузки требуется оперативной памяти из расчета 4 ГБ для Neo4j  и по 6 ГБ на каждую одновременно загружаемую базу. После загрузки потребление памяти значительно снижается.  
-
-#### Обновление/перезагрузка данных
-
-- Для полной перезагрузки данных проекта установите в docker-compose.yml переменную для соответсвующего проекта и перезапустите контейнер:
-
-```
-FULL_METADATA_RELOAD=true
-docker compose restart 1c-metacode-prj1
+# Тест SSE-эндпоинта (ожидаемый ответ: 200)
+curl -s -o /dev/null -w "%{http_code}" http://localhost:6001/sse --max-time 5
 ```
 
-#### Инструменты MCP
+---
 
-Сервер публикует 3 инструмента:
-- `search_metadata` — Поиск объектов метаданных по их структурным свойствам, связям, техническим характеристикам и отношениям.
-- `search_metadata_by_description` — Поиск объектов метаданных по их семантическому содержанию, используя описания, комментарии, синонимы и внутренние имена.
-- `search_code` — Семантический поиск процедур и функций по их описаниям и получение исходного кода BSL.
+## Подключение к AI-ассистенту
 
-Более подробно в **[Описание возможностей MCP сервера](./MCP_SERVER_CAPABILITIES.md)**
+### Claude Code
 
-Транспорт:
-- По умолчанию streamable-http (HTTP путь /mcp)
-- При MCP_USE_SSE=true — SSE-режим
-
-Подключение клиентов
-Используйте любой MCP-совместимый клиент (например, IDE/агенты с поддержкой OpenAI MCP). Укажите:
-- transport: streamable-http или sse
-- endpoint: http://localhost:6001/mcp
-
-Пример mcp.json для Cline
-
+```bash
+claude mcp add erp_main --transport sse http://localhost:6001/sse
 ```
+
+Или в `~/.claude/settings.json`:
+
+```json
 {
   "mcpServers": {
-    "1c-metacode": {
-      "url": "http://localhost:6001/mcp",
-      "connection_id": "1c_metacode_service_001",
-      "alwaysAllow": [],
-      "type": "streamable-http",
-      "timeout": 300
-      
-    }
+    "erp_main": { "type": "sse", "url": "http://localhost:6001/sse" }
   }
 }
 ```
 
-#### Обновление 
+### Cursor / Windsurf / другие MCP-клиенты
 
-Для обновления на новую версию приложения 
+SSE-эндпоинт: `http://localhost:6001/sse`
+
+---
+
+## MCP-инструменты
+
+### `search_metadata` -- 57 операций
+
+Основной инструмент. Принимает JSON с полем `"op"`:
+
+```json
+{"op": "list_categories"}
+{"op": "list_objects_by_name", "name": "Контрагенты"}
+{"op": "object_structure", "name": "ДокументыПредприятия"}
+{"op": "list_attributes_with_type", "name": "АМЕ_ДоговорыКонтрагентов"}
+{"op": "find_routines_by_name", "name": "ОтправитьЗапрос"}
+{"op": "get_routine_body", "id": "do_ame/АМЕ/CommonModules/КоннекторHTTP.ОтправитьЗапрос"}
+{"op": "find_usages_of_object", "name": "Контрагенты"}
+```
+
+<details>
+<summary><b>Полный список операций (нажмите чтобы развернуть)</b></summary>
+
+**Объекты и категории**
+| Операция | Описание |
+|----------|----------|
+| `list_categories` | Список всех категорий метаданных |
+| `list_objects_by_category` | Объекты в категории |
+| `list_objects_by_name` | Поиск объектов по имени (CONTAINS) |
+| `object_structure` | Полная карточка объекта: реквизиты, формы, ссылки |
+| `resolve_qn` | Разрешить квалифицированное имя в узел |
+| `resolve_qn_prefix` | Поиск узлов по префиксу QN |
+| `find_by_guid` | Поиск узла по GUID |
+| `get_node_properties` | Все свойства узла |
+
+**Реквизиты и структура**
+| Операция | Описание |
+|----------|----------|
+| `list_attributes` / `list_attributes_with_type` | Реквизиты объекта с типами |
+| `list_resources` / `list_resources_with_type` | Ресурсы регистра |
+| `list_dimensions` / `list_dimensions_with_type` | Измерения регистра |
+| `list_characteristics` / `list_characteristics_with_type` | Характеристики |
+| `list_tabular_parts` | Табличные части |
+| `list_tabular_attributes` | Реквизиты табличной части |
+| `find_objects_with_tabular` | Объекты с определённой табличной частью |
+| `find_objects_by_attribute_in_tabular` | Поиск по реквизиту в табличной части |
+
+**Формы**
+| Операция | Описание |
+|----------|----------|
+| `list_forms` | Формы объекта |
+| `list_form_controls` | Элементы формы |
+| `list_form_events` / `list_form_event_handlers` | События формы |
+| `list_form_attributes_of_form` | Реквизиты формы |
+| `list_form_commands` | Команды формы (кнопки) |
+| `list_form_bindings` | Привязки элементов к реквизитам |
+| `find_controls_bound_to` | Элементы привязанные к реквизиту |
+| `get_default_forms` | Основные формы |
+
+**Команды и макеты**
+| Операция | Описание |
+|----------|----------|
+| `list_commands` | Команды объекта |
+| `list_layouts` | Макеты объекта |
+
+**Модули и код**
+| Операция | Описание |
+|----------|----------|
+| `list_modules_of_owner` | Модули объекта |
+| `list_module_routines` | Процедуры/функции модуля |
+| `list_common_module_routines` | Процедуры общего модуля |
+| `list_exported_routines` | Экспортные процедуры |
+| `get_routine_body` | Полный исходный код процедуры |
+| `find_routines_by_name` | Поиск процедур по имени |
+| `find_routines_by_signature` | Поиск по тексту сигнатуры |
+| `find_unused_routines` | Неиспользуемые процедуры |
+
+**Граф вызовов**
+| Операция | Описание |
+|----------|----------|
+| `list_callers_of_routine` | Кто вызывает процедуру |
+| `list_callees_of_routine` | Что вызывает процедура |
+| `call_graph_subtree` | Дерево вызовов (глубина 1-3) |
+| `find_calls_between_owners` | Вызовы между двумя модулями/объектами |
+
+**Перечисления и предопределённые**
+| Операция | Описание |
+|----------|----------|
+| `list_enum_values` | Значения перечисления |
+| `list_predefined_of_object` | Предопределённые элементы |
+| `find_predefined_by_name_in_object` | Поиск предопределённого по имени |
+| `find_predefined_by_flag` | Поиск по признаку папка/элемент |
+
+**Роли и доступ**
+| Операция | Описание |
+|----------|----------|
+| `list_roles_with_access_to_target` | Роли с доступом к объекту |
+| `list_access_targets_of_role` | Объекты доступные роли |
+| `get_access_of_role_to_target` | Конкретные права роли на объект |
+
+**Перекрёстные ссылки**
+| Операция | Описание |
+|----------|----------|
+| `find_usages_of_object` | Кто ссылается на объект (через типы) |
+| `find_objects_using_object` | На что ссылается объект |
+| `find_documents_making_movements_into_register` | Документы делающие движения в регистр |
+| `find_journals_by_graph` | Графы журналов |
+
+**События и HTTP**
+| Операция | Описание |
+|----------|----------|
+| `list_event_subscriptions` | Все подписки на события |
+| `list_event_subscriptions_of_object` | Подписки для объекта |
+| `list_http_services` | HTTP-сервисы |
+| `list_url_templates_of_service` | URL-шаблоны |
+| `list_url_methods_of_template` | HTTP-методы |
+
+</details>
+
+### `search_code` -- поиск по BSL-коду
+
+```json
+{"op": "find_routines_by_description", "text": "HTTP", "export": true}
+{"op": "get_routine_body", "name": "ВыполнитьЗапрос"}
+```
+
+### `search_metadata_by_description` -- полнотекстовый поиск
+
+```json
+{"text": "премия"}
+{"text": "контрагент", "category": "Справочники"}
+```
+
+---
+
+## Добавление новых проектов
+
+Скопируйте блок сервиса в `lite/docker-compose.yml`:
+
+```yaml
+1c-metacode-ssl3:
+  image: svhov/1c-metacode-lite
+  build: ./mcp-service
+  restart: unless-stopped
+  ports:
+    - "6003:6001"                         # уникальный порт на хосте
+  volumes:
+    - /path/to/ssl3:/app/data             # ваши данные
+  environment:
+    - PROJECT_NAME=ssl3                   # уникальное имя
+    - MEMGRAPH_URI=bolt://memgraph:7687
+    - MCP_PORT=6001
+    - FULL_METADATA_RELOAD=true
+  depends_on:
+    memgraph:
+      condition: service_healthy
+```
+
+## Конфигурация
+
+| Переменная | Описание | По умолчанию |
+|------------|----------|:------------:|
+| `PROJECT_NAME` | Уникальный идентификатор проекта | `default` |
+| `MEMGRAPH_URI` | Bolt URI для Memgraph | `bolt://localhost:7687` |
+| `MCP_PORT` | Порт MCP-сервера внутри контейнера | `6001` |
+| `FULL_METADATA_RELOAD` | Очистить и перезагрузить все данные при старте | `false` |
+| `LOAD_BSL_SIGNATURES` | Парсить .bsl файлы (процедуры/функции) | `true` |
+| `LOAD_FORMS_FROM_XML` | Парсить файлы Form.xml | `true` |
+| `LOAD_PREDEFINED_VALUES` | Парсить предопределённые элементы | `true` |
+| `LOAD_ROLE_RIGHTS` | Парсить права ролей | `true` |
+
+---
+
+## Модель графа
 
 ```
-docker compose pull
-docker compose down --volumes
-docker compose up -d --force-recreate
+Project
+  +-- Configuration
+        +-- MetadataCategory
+              +-- MetadataObject
+                    |-- Attribute (с type_info)
+                    |-- Resource
+                    |-- Dimension
+                    |-- TabularPart
+                    |     +-- Attribute
+                    |-- Form
+                    |     |-- FormControl --BINDS_TO--> FormAttribute
+                    |     +-- FormEvent
+                    |-- EnumValue
+                    |-- PredefinedItem
+                    |-- Command
+                    |-- Layout
+                    +-- Module
+                          +-- Routine --CALLS--> Routine
+
+MetadataObject --USED_IN--> MetadataObject
+MetadataObject --GRANTS_ACCESS_TO--> MetadataObject (роли)
 ```
 
-Если нужно начать всё с нуля и удалить полностью базу то выполните
+---
 
-```
-docker compose down --volumes
-docker compose up -d --force-recreate
-```
+## Известные ограничения
 
-#### Changelog
+- **Нет векторного/embedding поиска** -- только шаблонные запросы, LLM не нужен
+- **Нет запросов на естественном языке** -- только JSON-операции (by design: ноль внешних зависимостей)
+- **Поиск по кириллице** -- `toLower()` в Memgraph не работает с кириллицей; поиск использует множественные варианты регистра из Python
+- **USED_IN связи** строятся только из типов реквизитов (`СправочникСсылка.X`), не из всех возможных ссылок
 
-##### v1.3.0 - 2025-10-29
-- Добавлена поддержка загрузки процедур/функций из модуля формы обычных форм (файлы Form.bin). 
-- Улучшена скорость загрузки (примерно в 2 раза) путем распараллеливания процесса загрузки на несколько ядер.
-- Добавлена векторная индексация описаний процедур/функций, описаний метаданных, а так же гибридный поиск по этим описаниям. 
+---
 
-##### v1.2.0 - 2025-10-20
-- Добавлена загрузка тела процедур и функций, а также их описаний (комментарии над сигнатурой). 
-- Возможность полнотекстового поиска процедур и функций по описанию. 
-- Возможность получения тела процедуры/функции прямо из графовой базы. 
-- Добавлена поддержка загрузки справки по объектам метаданным с возможностью полнотекстового поиска объектов метаданных по этой справке, а так же по другим описательным полям. 
+## Лицензия
 
-##### v1.1.0 - 2025-10-07
-- Добавлена поддержка загрузки подписок на события
-- Добавлена поддержка загрузки модулей с процедурами/функциями и формирования графа вызовов
+MIT
 
-##### v1.0.0 - 2025-09-30
-- Первоначальный релиз с загрузкой метаданных 1С в Neo4j
-- Поддержка MCP инструментов для поиска метаданных
+---
 
-
+<p align="center">
+  <a href="https://www.youtube.com/@svhovbase">
+    <img src="https://img.shields.io/badge/YouTube-@svhovbase-FF0000?style=flat-square&logo=youtube&logoColor=white" alt="YouTube" />
+  </a>
+</p>

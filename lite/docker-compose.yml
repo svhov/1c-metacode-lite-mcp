@@ -18,16 +18,20 @@ services:
       retries: 10
       start_period: 5s
 
-  1c-metacode-do_ame:
+  # ── Example: single project ─────────────────────────────────────────
+  # Copy this block and change PROJECT_NAME, ports, and volume path
+  # for each 1C configuration you want to serve.
+
+  1c-metacode-erp_main:
     image: svhov/1c-metacode-lite
     build: ./mcp-service
     restart: unless-stopped
     ports:
-      - "6005:6001"
+      - "6001:6001"
     volumes:
-      - C:\sukhov_ae\1c-metacode-mcp\do_ame:/app/data
+      - /path/to/erp_main:/app/data          # <-- set your local path
     environment:
-      - PROJECT_NAME=do_ame
+      - PROJECT_NAME=erp_main
       - MEMGRAPH_URI=bolt://memgraph:7687
       - MCP_PORT=6001
       - FULL_METADATA_RELOAD=true
@@ -38,6 +42,25 @@ services:
     depends_on:
       memgraph:
         condition: service_healthy
+
+  # ── Add more projects below ─────────────────────────────────────────
+  #
+  # 1c-metacode-ssl3:
+  #   image: svhov/1c-metacode-lite
+  #   build: ./mcp-service
+  #   restart: unless-stopped
+  #   ports:
+  #     - "6003:6001"
+  #   volumes:
+  #     - /path/to/ssl3:/app/data
+  #   environment:
+  #     - PROJECT_NAME=ssl3
+  #     - MEMGRAPH_URI=bolt://memgraph:7687
+  #     - MCP_PORT=6001
+  #     - FULL_METADATA_RELOAD=true
+  #   depends_on:
+  #     memgraph:
+  #       condition: service_healthy
 
 volumes:
   memgraph_data:
