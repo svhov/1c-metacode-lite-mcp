@@ -375,6 +375,16 @@ MIT
 
 ---
 
+## Поддержать проект
+
+Если проект оказался полезен, можете поддержать автора:
+
+| Сбербанк | `2202 2054 0027 9540` |
+|:---------|:----------------------|
+| Получатель | Сухов Андрей Евгеньевич |
+
+---
+
 <p align="center">
   <a href="https://www.youtube.com/@svhovbase">
     <img src="https://img.shields.io/badge/YouTube-@svhovbase-FF0000?style=flat-square&logo=youtube&logoColor=white" alt="YouTube" />
