@@ -75,7 +75,7 @@ MCP-сервер, который загружает **метаданные ко�
                         |
        +--------+-------+-------+--------+
        |        |       |       |        |
-   erp_main  erp_ame  ssl3  do_main  do_ame
+   erp_main  erp_ext  ssl3  do_main  do_ext
     :6001     :6002   :6003  :6004   :6005
        (Python FastMCP, SSE транспорт)
 ```
@@ -175,7 +175,7 @@ SSE-эндпоинт: `http://localhost:6001/sse`
 {"op": "object_structure", "name": "ДокументыПредприятия"}
 {"op": "list_attributes_with_type", "name": "АМЕ_ДоговорыКонтрагентов"}
 {"op": "find_routines_by_name", "name": "ОтправитьЗапрос"}
-{"op": "get_routine_body", "id": "do_ame/АМЕ/CommonModules/КоннекторHTTP.ОтправитьЗапрос"}
+{"op": "get_routine_body", "id": "do_ext/АМЕ/CommonModules/КоннекторHTTP.ОтправитьЗапрос"}
 {"op": "find_usages_of_object", "name": "Контрагенты"}
 ```
 
