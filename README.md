@@ -369,6 +369,36 @@ MetadataObject --GRANTS_ACCESS_TO--> MetadataObject (роли)
 
 ---
 
+## Участники
+
+<table>
+  <tr>
+    <td align="center">
+      <a href="https://github.com/svhov">
+        <img src="https://github.com/svhov.png" width="80" style="border-radius:50%" alt="svhov"/><br/>
+        <sub><b>Сухов Андрей</b></sub>
+      </a><br/>
+      <sub>Автор проекта</sub>
+    </td>
+    <td align="center">
+      <a href="https://github.com/anthropics">
+        <img src="https://github.com/anthropics.png" width="80" style="border-radius:50%" alt="Claude"/><br/>
+        <sub><b>Claude (Anthropic)</b></sub>
+      </a><br/>
+      <sub>AI co-author</sub>
+    </td>
+    <td align="center">
+      <a href="https://github.com/jlowin">
+        <img src="https://github.com/jlowin.png" width="80" style="border-radius:50%" alt="jlowin"/><br/>
+        <sub><b>Jeremiah Lowin</b></sub>
+      </a><br/>
+      <sub>Автор <a href="https://github.com/jlowin/fastmcp">FastMCP</a></sub>
+    </td>
+  </tr>
+</table>
+
+---
+
 ## Лицензия
 
 MIT
