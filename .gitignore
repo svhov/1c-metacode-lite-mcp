@@ -32,6 +32,13 @@ desktop.ini
 # Data directories (mounted volumes)
 data/
 
+# Temporary edit files
+edit_*.txt
+
+# ML models (too large for GitHub)
+*.onnx
+lite/mcp-service/models/
+
 # Legacy (non-lite) files
 docker-compose.yml
 !lite/docker-compose.yml
@@ -41,3 +48,4 @@ start-mcp.log
 PLAN-lightweight-mcp.md
 MCP_SERVER_CAPABILITIES.md
 .env.example
+nohup.out

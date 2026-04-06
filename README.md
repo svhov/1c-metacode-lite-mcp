@@ -2,14 +2,15 @@
   <img src="https://img.shields.io/badge/1C:Предприятие-MCP_Сервер-yellow?style=for-the-badge&logo=1c&logoColor=white" alt="1C MCP" />
   <img src="https://img.shields.io/badge/Memgraph-Графовая_БД-6B4FBB?style=for-the-badge&logo=memgraph&logoColor=white" alt="Memgraph" />
   <img src="https://img.shields.io/badge/Python-3.12-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python" />
+  <img src="https://img.shields.io/badge/ONNX-Semantic_Search-005CED?style=for-the-badge&logo=onnx&logoColor=white" alt="ONNX" />
   <img src="https://img.shields.io/badge/Docker-Compose-2496ED?style=for-the-badge&logo=docker&logoColor=white" alt="Docker" />
 </p>
 
-<h1 align="center">🚀 1C Metacode MCP Lite</h1>
+<h1 align="center">1C Metacode MCP Lite</h1>
 
 <p align="center">
-  <b>⚡ Легковесный MCP-сервер для графа метаданных 1С:Предприятие</b><br/>
-  <sub>🧠 Memgraph + Python FastMCP &mdash; в 3 раза меньше RAM чем Neo4j</sub>
+  <b>Легковесный MCP-сервер для графа метаданных 1С:Предприятие с семантическим поиском</b><br/>
+  <sub>Memgraph + ONNX Embeddings + Hybrid Search &mdash; в 2.5 раза меньше RAM чем Neo4j + PyTorch</sub>
 </p>
 
 <p align="center">
@@ -20,75 +21,94 @@
 
 ---
 
-## 🤔 Что это?
+## Что это?
 
-MCP-сервер, который загружает **метаданные конфигурации 1С:Предприятие** в **графовую базу данных** и предоставляет инструменты для AI-ассистентов (Claude Code, Cursor, Windsurf и др.) через [Model Context Protocol](https://modelcontextprotocol.io/).
+MCP-сервер, который загружает **метаданные конфигурации 1С:Предприятие** в **графовую базу данных** и предоставляет AI-ассистентам (Claude Code, Cursor, Windsurf и др.) два инструмента через [Model Context Protocol](https://modelcontextprotocol.io/):
 
-Ваш AI-ассистент получает **полное структурное знание** о конфигурации 1С:
+1. **`search_metadata`** &mdash; структурный поиск по графу метаданных (14 операций)
+2. **`search_by_embedding`** &mdash; семантический поиск по смыслу (E5 + cross-encoder + BM25)
 
-- 📦 Все объекты метаданных (справочники, документы, регистры, перечисления и т.д.)
-- 📝 Реквизиты, ресурсы, измерения с типами
-- 🖥️ Формы, элементы управления, события, привязки
-- 💻 BSL-код: процедуры, функции, сигнатуры, граф вызовов
-- 🔐 Роли и права доступа
-- 🔗 Перекрёстные ссылки между объектами (USED_IN)
-- 📌 Предопределённые элементы
+AI-ассистент получает **полное структурное и семантическое знание** о конфигурации 1С:
 
----
-
-## 💡 Почему Lite? Сравнение RAM с Neo4j
-
-Оригинальный подход использует **Neo4j** (графовая БД на JVM). На типичных машинах это означает:
-
-| Компонент | 🐘 Стек Neo4j | 🦎 Lite (Memgraph) | 💰 Экономия |
-|:----------|:----------:|:---------------:|:--------:|
-| Графовая БД | **1200 -- 1500 МБ** | **100 -- 500 МБ** | 3 -- 5x |
-| 1 MCP-сервис | 200 -- 400 МБ | 80 -- 150 МБ | 2 -- 3x |
-| **2 проекта + БД** | **~2500 МБ** | **~600 -- 1000 МБ** | **2.5x** |
-| **5 проектов + БД** | **~3500 МБ** | **~1000 -- 1500 МБ** | **2.5x** |
-
-### ⏱️ Скорость запуска
-
-| Этап | 🐘 Стек Neo4j | 🦎 Lite |
-|:-----|:----------:|:----:|
-| БД готова | 30 -- 45 сек | **2 -- 5 сек** ⚡ |
-| Загрузка маленькой конфигурации (361 объект) | ~30 сек | **6 сек** ⚡ |
-| Загрузка большой конфигурации (8000+ объектов) | 5 -- 20 мин | **1 -- 3 мин** ⚡ |
-| MCP-сервер принимает запросы | после полной загрузки | **мгновенно** 🎯 |
-
-### 🛡️ Стабильность
-
-| Проблема | 🐘 Стек Neo4j | 🦎 Lite |
-|:---------|:----------:|:----:|
-| JVM crash (`assembler_x86.cpp`) | Бывает на некоторых хостах 😵 | **Нет JVM вообще** ✅ |
-| `docker stop` зависает после краша | Часто 😤 | **Никогда** ✅ |
-| Transaction timeout при нагрузке | При загрузке 5 сервисов 💥 | **Нет** (нативный C++) ✅ |
-| Требуется `-Xint` (без JIT) | Да, замедляет всё 🐢 | **Не нужен** ✅ |
-| Строгий порядок запуска обязателен | Да, поэтапно 😰 | **Нет, можно все сразу** ✅ |
+- Все объекты метаданных (справочники, документы, регистры, перечисления и т.д.)
+- Реквизиты, ресурсы, измерения с типами
+- Формы, элементы управления, события, привязки
+- BSL-код: процедуры, функции, сигнатуры, граф вызовов
+- Роли и права доступа
+- Перекрёстные ссылки между объектами (USED_IN, DO_MOVEMENTS_IN)
+- Предопределённые элементы
+- **Семантический поиск**: "где формируются проводки по зарплате?" &rarr; находит нужные процедуры по смыслу
 
 ---
 
-## 🏗️ Архитектура
+## Сравнение с аналогами
+
+### vs Neo4j + sentence-transformers (PyTorch)
+
+| Компонент | Neo4j + PyTorch | **Lite (Memgraph + ONNX)** | Экономия |
+|:----------|:---------------:|:--------------------------:|:--------:|
+| Графовая БД | 1200 &ndash; 1500 МБ (JVM) | **100 &ndash; 500 МБ** (C++) | 3 &ndash; 5x |
+| Embedding runtime | ~600 МБ (torch) | **~60 МБ** (onnxruntime) | 10x |
+| Модель в RAM | ~900 МБ (FP32) | **~400 МБ** (INT8) | 2x |
+| Хранение векторов | В heap БД | **sqlite-vec (на диске)** | 0 МБ RAM |
+| Docker image | ~3.5 ГБ | **~1.4 ГБ** | 2.5x |
+| **2 проекта + БД** | **~12 ГБ** | **~5 ГБ** | **2.5x** |
+
+### Скорость
+
+| Этап | Neo4j + PyTorch | **Lite** |
+|:-----|:---------------:|:--------:|
+| БД готова | 30 &ndash; 45 сек | **2 &ndash; 5 сек** |
+| Загрузка конфигурации (8000+ объектов) | 5 &ndash; 20 мин | **1 &ndash; 3 мин** |
+| MCP-сервер принимает запросы | после загрузки | **мгновенно** |
+| Embedding query | ~80 мс (FP32) | **~50 мс** (INT8) |
+
+### Стабильность
+
+| Проблема | Neo4j | **Lite** |
+|:---------|:-----:|:--------:|
+| JVM crash / OOM | Бывает | **Нет JVM** |
+| `docker stop` зависает | Часто | **Никогда** |
+| Transaction timeout | При 5 сервисах | **Нет** (C++) |
+| Требуется `-Xint` (без JIT) | Да | **Не нужен** |
+
+---
+
+## Архитектура
 
 ```
                   Memgraph (bolt://7687)
                         |
-       +--------+-------+-------+--------+
-       |        |       |       |        |
-   erp_main  erp_ext  ssl3  do_main  do_ext
-    :6001     :6002   :6003  :6004   :6005
-       (Python FastMCP, SSE транспорт)
+          +-------------+-------------+
+          |                           |
+     do_main :6004              do_ame :6005
+     (Python FastMCP, SSE транспорт)
+          |                           |
+   +------+------+            +------+------+
+   | Graph Search |            | Graph Search |
+   | (14 операций)|            | (14 операций)|
+   +------+------+            +------+------+
+   | Hybrid Search|            | Hybrid Search|
+   | E5 + CE + BM25           | E5 + CE + BM25
+   +------+------+            +------+------+
+   | sqlite-vec   |            | sqlite-vec   |
+   | embeddings.db|            | embeddings.db|
+   +--------------+            +--------------+
 ```
 
-- 🗄️ **Memgraph** -- графовая БД (Bolt-протокол, Cypher-запросы, совместима с Neo4j-драйвером)
-- 🐍 **MCP-сервисы** -- Python 3.12 + FastMCP, SSE-транспорт
-- 🔒 Все проекты используют один Memgraph, изолированы по `project_name`
+**Компоненты:**
+- **Memgraph** (C++) &mdash; графовая БД, Bolt-протокол, совместима с Neo4j-драйвером
+- **MCP-сервисы** &mdash; Python 3.12 + FastMCP, SSE-транспорт
+- **E5-base** (ONNX INT8) &mdash; multilingual embedding модель (768 dim)
+- **Cross-encoder** (ONNX INT8) &mdash; reranker для точности порядка
+- **sqlite-vec** + **FTS5** &mdash; векторный + полнотекстовый поиск на диске
+- Все проекты используют один Memgraph, изолированы по `project_name`
 
 ---
 
-## 🚀 Быстрый старт
+## Быстрый старт
 
-### 1️⃣ Подготовьте данные
+### 1. Подготовьте данные
 
 Каждому проекту нужна директория с:
 
@@ -104,235 +124,119 @@ MCP-сервер, который загружает **метаданные ко�
     ...
 ```
 
-> 📋 Экспорт отчёта по конфигурации из Конфигуратора 1С:
-> **Конфигурация -> Отчёт по конфигурации** (выбрать все объекты, сохранить как `.txt`)
+> Экспорт отчёта: **Конфигуратор &rarr; Конфигурация &rarr; Отчёт по конфигурации** (все объекты, `.txt`)
 
-### 2️⃣ Укажите путь к данным
+### 2. Укажите путь к данным
 
-Отредактируйте `lite/docker-compose.yml` -- замените `/path/to/erp_main` на реальный путь:
+Отредактируйте `lite/docker-compose.yml`:
 
 ```yaml
 volumes:
-  - /path/to/erp_main:/app/data
+  - C:\path\to\your\data:/app/data
 ```
 
-> ⚠️ **Для Windows**: используйте локальные пути типа `C:\1c-data\erp_main`, НЕ UNC-пути.
-
-### 3️⃣ Запуск
+### 3. Запуск
 
 ```bash
 cd lite/
-docker compose up -d
+
+# Собрать образ
+docker compose build
+
+# Поднять Memgraph
+docker compose up -d memgraph
+
+# Поднять MCP-сервис (подождать healthy)
+docker compose up -d 1c-metacode-do_main
 ```
 
-✅ Всё! Memgraph стартует за ~3 секунды, MCP-сервер начинает принимать запросы мгновенно, данные загружаются в фоне.
+MCP-сервер начинает принимать запросы мгновенно. Данные и embeddings загружаются в фоне.
 
-### 4️⃣ Проверка
+### 4. Подключение к AI-ассистенту
 
+**Claude Code:**
 ```bash
-# 👀 Проверить что контейнеры запущены
-docker ps
-
-# 🔍 Тест SSE-эндпоинта (ожидаемый ответ: 200)
-curl -s -o /dev/null -w "%{http_code}" http://localhost:6001/sse --max-time 5
+claude mcp add do_main --transport sse http://localhost:6004/sse
 ```
+
+**Cursor / Windsurf:** SSE-эндпоинт `http://localhost:6004/sse`
 
 ---
 
-## 🔌 Подключение к AI-ассистенту
+## MCP-инструменты
 
-### 🤖 Claude Code
-
-```bash
-claude mcp add erp_main --transport sse http://localhost:6001/sse
-```
-
-Или в `~/.claude/settings.json`:
+### `search_metadata` &mdash; структурный поиск (14 операций + code search)
 
 ```json
-{
-  "mcpServers": {
-    "erp_main": { "type": "sse", "url": "http://localhost:6001/sse" }
-  }
-}
-```
-
-### 🖱️ Cursor / Windsurf / другие MCP-клиенты
-
-SSE-эндпоинт: `http://localhost:6001/sse`
-
----
-
-## 🛠️ MCP-инструменты
-
-### 🔎 `search_metadata` -- 57 операций
-
-Основной инструмент. Принимает JSON с полем `"op"`:
-
-```json
-{"op": "list_categories"}
-{"op": "list_objects_by_name", "name": "Контрагенты"}
+{"op": "browse", "name": "Контрагент"}
 {"op": "object_structure", "name": "ДокументыПредприятия"}
-{"op": "list_attributes_with_type", "name": "АМЕ_ДоговорыКонтрагентов"}
-{"op": "find_routines_by_name", "name": "ОтправитьЗапрос"}
-{"op": "get_routine_body", "id": "do_ext/АМЕ/CommonModules/КоннекторHTTP.ОтправитьЗапрос"}
-{"op": "find_usages_of_object", "name": "Контрагенты"}
+{"op": "get_children", "name": "РеализацияТоваров", "child_type": "Attribute"}
+{"op": "get_routines", "name": "ОтправитьЗапрос"}
+{"op": "get_references", "name": "Контрагенты", "direction": "incoming"}
+{"op": "find_routines_by_description", "text": "штрихкод"}
 ```
 
-<details>
-<summary><b>📜 Полный список операций (нажмите чтобы развернуть)</b></summary>
+| Операция | Описание | Параметры |
+|----------|----------|-----------|
+| `browse` | Категории, объекты, поиск | `category`, `name` |
+| `object_structure` | Полная карточка объекта | `name` |
+| `get_children` | Реквизиты, ресурсы, измерения, ТЧ, команды, макеты | `name`, `child_type`, `tabular` |
+| `find_by_child` | Объекты по реквизиту/ТЧ | `tabular`, `attribute` |
+| `get_form` | Формы, элементы, события, привязки | `name`, `form`, `detail`, `limit` |
+| `get_routines` | Процедуры/функции | `name`, `module`, `signature`, `export`, `unused` |
+| `get_routine_body` | Исходный код процедуры | `name` или `id`, `owner` |
+| `get_call_graph` | Граф вызовов | `name`/`id`, `direction`, `from`/`to` |
+| `get_predefined` | Предопределённые элементы | `name`, `item`, `is_folder` |
+| `get_access` | Права ролей | `role`, `target` |
+| `get_references` | USED_IN, DO_MOVEMENTS_IN | `name`, `direction` |
+| `get_subscriptions` | Подписки на события | `name` |
+| `get_http_service` | HTTP-сервисы, URL-шаблоны | `name`, `template` |
+| `resolve` | Разрешить QN, GUID, prefix | `qn`, `guid`, `prefix` |
+| `find_routines_by_description` | Поиск по описанию кода | `text`, `export` |
 
-**📦 Объекты и категории**
-| Операция | Описание |
-|----------|----------|
-| `list_categories` | Список всех категорий метаданных |
-| `list_objects_by_category` | Объекты в категории |
-| `list_objects_by_name` | Поиск объектов по имени (CONTAINS) |
-| `object_structure` | Полная карточка объекта: реквизиты, формы, ссылки |
-| `resolve_qn` | Разрешить квалифицированное имя в узел |
-| `resolve_qn_prefix` | Поиск узлов по префиксу QN |
-| `find_by_guid` | Поиск узла по GUID |
-| `get_node_properties` | Все свойства узла |
+> Старые имена операций (57 шт.) сохранены как алиасы для обратной совместимости.
 
-**📝 Реквизиты и структура**
-| Операция | Описание |
-|----------|----------|
-| `list_attributes` / `list_attributes_with_type` | Реквизиты объекта с типами |
-| `list_resources` / `list_resources_with_type` | Ресурсы регистра |
-| `list_dimensions` / `list_dimensions_with_type` | Измерения регистра |
-| `list_characteristics` / `list_characteristics_with_type` | Характеристики |
-| `list_tabular_parts` | Табличные части |
-| `list_tabular_attributes` | Реквизиты табличной части |
-| `find_objects_with_tabular` | Объекты с определённой табличной частью |
-| `find_objects_by_attribute_in_tabular` | Поиск по реквизиту в табличной части |
+### `search_by_embedding` &mdash; семантический поиск (опционально)
 
-**🖥️ Формы**
-| Операция | Описание |
-|----------|----------|
-| `list_forms` | Формы объекта |
-| `list_form_controls` | Элементы формы |
-| `list_form_events` / `list_form_event_handlers` | События формы |
-| `list_form_attributes_of_form` | Реквизиты формы |
-| `list_form_commands` | Команды формы (кнопки) |
-| `list_form_bindings` | Привязки элементов к реквизитам |
-| `find_controls_bound_to` | Элементы привязанные к реквизиту |
-| `get_default_forms` | Основные формы |
-
-**⚙️ Команды и макеты**
-| Операция | Описание |
-|----------|----------|
-| `list_commands` | Команды объекта |
-| `list_layouts` | Макеты объекта |
-
-**💻 Модули и код**
-| Операция | Описание |
-|----------|----------|
-| `list_modules_of_owner` | Модули объекта |
-| `list_module_routines` | Процедуры/функции модуля |
-| `list_common_module_routines` | Процедуры общего модуля |
-| `list_exported_routines` | Экспортные процедуры |
-| `get_routine_body` | Полный исходный код процедуры |
-| `find_routines_by_name` | Поиск процедур по имени |
-| `find_routines_by_signature` | Поиск по тексту сигнатуры |
-| `find_unused_routines` | Неиспользуемые процедуры |
-
-**🔀 Граф вызовов**
-| Операция | Описание |
-|----------|----------|
-| `list_callers_of_routine` | Кто вызывает процедуру |
-| `list_callees_of_routine` | Что вызывает процедура |
-| `call_graph_subtree` | Дерево вызовов (глубина 1-3) |
-| `find_calls_between_owners` | Вызовы между двумя модулями/объектами |
-
-**📌 Перечисления и предопределённые**
-| Операция | Описание |
-|----------|----------|
-| `list_enum_values` | Значения перечисления |
-| `list_predefined_of_object` | Предопределённые элементы |
-| `find_predefined_by_name_in_object` | Поиск предопределённого по имени |
-| `find_predefined_by_flag` | Поиск по признаку папка/элемент |
-
-**🔐 Роли и доступ**
-| Операция | Описание |
-|----------|----------|
-| `list_roles_with_access_to_target` | Роли с доступом к объекту |
-| `list_access_targets_of_role` | Объекты доступные роли |
-| `get_access_of_role_to_target` | Конкретные права роли на объект |
-
-**🔗 Перекрёстные ссылки**
-| Операция | Описание |
-|----------|----------|
-| `find_usages_of_object` | Кто ссылается на объект (через типы) |
-| `find_objects_using_object` | На что ссылается объект |
-| `find_documents_making_movements_into_register` | Документы делающие движения в регистр |
-| `find_journals_by_graph` | Графы журналов |
-
-**🌐 События и HTTP**
-| Операция | Описание |
-|----------|----------|
-| `list_event_subscriptions` | Все подписки на события |
-| `list_event_subscriptions_of_object` | Подписки для объекта |
-| `list_http_services` | HTTP-сервисы |
-| `list_url_templates_of_service` | URL-шаблоны |
-| `list_url_methods_of_template` | HTTP-методы |
-
-</details>
-
-### 💻 `search_code` -- поиск по BSL-коду
+Ищет по смыслу, когда не знаешь точное имя объекта.
 
 ```json
-{"op": "find_routines_by_description", "text": "HTTP", "export": true}
-{"op": "get_routine_body", "name": "ВыполнитьЗапрос"}
+{"op": "search_routines", "text": "работа со штрихкодами и кодированием"}
+{"op": "search_objects", "text": "справочник видов операций с документами"}
+{"op": "search_all", "text": "архив документов"}
+{"op": "search_metadata_by_description", "text": "документы предприятия"}
 ```
 
-### 🔍 `search_metadata_by_description` -- полнотекстовый поиск
+**Как работает:**
+1. Запрос &rarr; E5-base embedding (768 dim)
+2. sqlite-vec KNN + FTS5 BM25 (hybrid search, адаптивные веса)
+3. Cross-encoder reranking (top-20 &rarr; top-7)
+4. Category boosting + dynamic threshold
 
-```json
-{"text": "премия"}
-{"text": "контрагент", "category": "Справочники"}
-```
+> Tip: описывайте ЧТО объект делает, а не техническое имя.
+> "справочник видов операций" &mdash; хорошо, "АМЕ_ВидыОпераций" &mdash; плохо.
 
 ---
 
-## ➕ Добавление новых проектов
-
-Скопируйте блок сервиса в `lite/docker-compose.yml`:
-
-```yaml
-1c-metacode-ssl3:
-  image: svhov/1c-metacode-lite
-  build: ./mcp-service
-  restart: unless-stopped
-  ports:
-    - "6003:6001"                         # уникальный порт на хосте
-  volumes:
-    - /path/to/ssl3:/app/data             # ваши данные
-  environment:
-    - PROJECT_NAME=ssl3                   # уникальное имя
-    - MEMGRAPH_URI=bolt://memgraph:7687
-    - MCP_PORT=6001
-    - FULL_METADATA_RELOAD=true
-  depends_on:
-    memgraph:
-      condition: service_healthy
-```
-
-## ⚙️ Конфигурация
+## Конфигурация
 
 | Переменная | Описание | По умолчанию |
 |------------|----------|:------------:|
 | `PROJECT_NAME` | Уникальный идентификатор проекта | `default` |
 | `MEMGRAPH_URI` | Bolt URI для Memgraph | `bolt://localhost:7687` |
-| `MCP_PORT` | Порт MCP-сервера внутри контейнера | `6001` |
-| `FULL_METADATA_RELOAD` | Очистить и перезагрузить все данные при старте | `false` |
-| `LOAD_BSL_SIGNATURES` | Парсить .bsl файлы (процедуры/функции) | `true` |
-| `LOAD_FORMS_FROM_XML` | Парсить файлы Form.xml | `true` |
-| `LOAD_PREDEFINED_VALUES` | Парсить предопределённые элементы | `true` |
+| `MCP_PORT` | Порт MCP-сервера | `6001` |
+| `FULL_METADATA_RELOAD` | Полная перезагрузка данных при старте | `false` |
+| `LOAD_BSL_SIGNATURES` | Парсить .bsl файлы | `true` |
+| `LOAD_FORMS_FROM_XML` | Парсить Form.xml | `true` |
+| `LOAD_PREDEFINED_VALUES` | Парсить предопределённые | `true` |
 | `LOAD_ROLE_RIGHTS` | Парсить права ролей | `true` |
+| `ENABLE_EMBEDDING` | Включить семантический поиск | `false` |
+| `EMBEDDING_MODEL_PATH` | Путь к ONNX модели embedding | `/app/models/e5-base` |
+| `RERANKER_MODEL_PATH` | Путь к ONNX модели cross-encoder | `/app/models/cross-encoder` |
 
 ---
 
-## 🧬 Модель графа
+## Модель графа
 
 ```
 Project
@@ -349,27 +253,99 @@ Project
                     |     +-- FormEvent
                     |-- EnumValue
                     |-- PredefinedItem
-                    |-- Command
-                    |-- Layout
+                    |-- Command, Layout
                     +-- Module
                           +-- Routine --CALLS--> Routine
 
-MetadataObject --USED_IN--> MetadataObject
+MetadataObject --USED_IN--> MetadataObject        (из типов реквизитов + BSL-кода)
+MetadataObject --DO_MOVEMENTS_IN--> MetadataObject (документы -> регистры)
 MetadataObject --GRANTS_ACCESS_TO--> MetadataObject (роли)
+```
+
+**USED_IN** строится из двух источников:
+1. Типы реквизитов (`СправочникСсылка.Контрагенты` в metadata)
+2. BSL-код (`Справочники.Контрагенты.НайтиПоКоду(...)` в исходниках)
+
+**DO_MOVEMENTS_IN** строится из паттернов `Движения.ИмяРегистра.Записать()` в модулях документов.
+
+---
+
+## Embedding pipeline
+
+```
+Загрузка (фоновый поток):
+  BSL-код + метаданные --> граф в Memgraph
+       |
+  Для каждого объекта/процедуры:
+       |-- CamelCase split: АМЕ_ВидыОпераций --> АМЕ Виды Операций
+       |-- Compose text: category | name | synonym | attributes
+       |-- E5-base ONNX: text --> vector (768 dim)
+       |-- sqlite-vec: сохранить на диск (embeddings.db)
+       +-- FTS5: сохранить text для BM25
+
+Поиск (при запросе):
+  "справочник видов операций"
+       |-- E5-base: query --> vector ("query: " prefix)
+       |-- sqlite-vec KNN: top-20 по cosine
+       |-- FTS5 BM25: top-20 по словам
+       |-- Hybrid merge: 85% embedding + 15% BM25 (адаптивно)
+       |-- Cross-encoder rerank: top-20 --> top-7
+       |-- Category boost + dynamic threshold
+       +-- Результат: [{name, score, category, ...}]
+```
+
+**Инкрементальные обновления:** при рестарте с `FULL_METADATA_RELOAD=true` пересчитываются только изменённые записи (по MD5-хешу текста).
+
+---
+
+## Потребление RAM
+
+| Конфигурация | Без embedding | С embedding |
+|:-------------|:-------------:|:-----------:|
+| Memgraph | 100 &ndash; 500 МБ | 100 &ndash; 500 МБ |
+| MCP-сервис (малая конфигурация, ~300 объектов) | ~80 МБ | ~1.3 ГБ |
+| MCP-сервис (большая конфигурация, ~8000 объектов) | ~150 МБ | ~2 &ndash; 3 ГБ |
+
+> E5-base (~400 МБ) + cross-encoder (~200 МБ) + sqlite-vec (на диске) = основной вес embedding.
+> Без embedding сервис остаётся легковесным (~80-150 МБ).
+
+---
+
+## Добавление новых проектов
+
+Скопируйте блок сервиса в `lite/docker-compose.yml`:
+
+```yaml
+1c-metacode-ssl3:
+  image: svhov/1c-metacode-lite
+  build: ./mcp-service
+  restart: unless-stopped
+  ports:
+    - "6003:6001"
+  volumes:
+    - /path/to/ssl3:/app/data
+  environment:
+    - PROJECT_NAME=ssl3
+    - MEMGRAPH_URI=bolt://memgraph:7687
+    - MCP_PORT=6001
+    - FULL_METADATA_RELOAD=true
+    - ENABLE_EMBEDDING=true
+  depends_on:
+    memgraph:
+      condition: service_healthy
 ```
 
 ---
 
-## ⚠️ Известные ограничения
+## Известные ограничения
 
-- 🚫 **Нет векторного/embedding поиска** -- только шаблонные запросы, LLM не нужен
-- 🚫 **Нет запросов на естественном языке** -- только JSON-операции (by design: ноль внешних зависимостей)
-- 🔤 **Поиск по кириллице** -- `toLower()` в Memgraph не работает с кириллицей; поиск использует множественные варианты регистра из Python
-- 🔗 **USED_IN связи** строятся только из типов реквизитов (`СправочникСсылка.X`), не из всех возможных ссылок
+- **Поиск по кириллице** &mdash; `toLower()` в Memgraph не работает с кириллицей; поиск использует множественные варианты регистра из Python
+- **Embedding пиковый RAM** &mdash; при первой индексации большой конфигурации (~90K routines) потребление может достигать 7 ГБ; после загрузки падает до 2-3 ГБ
+- **Embedding модели не в образе** &mdash; ONNX модели (E5-base, cross-encoder) скачиваются отдельно в `models/`; без них `ENABLE_EMBEDDING=true` упадёт при старте
 
 ---
 
-## 👥 Участники
+## Участники
 
 <table>
   <tr>
@@ -378,40 +354,40 @@ MetadataObject --GRANTS_ACCESS_TO--> MetadataObject (роли)
         <img src="https://github.com/svhov.png" width="80" style="border-radius:50%" alt="svhov"/><br/>
         <sub><b>Сухов Андрей</b></sub>
       </a><br/>
-      <sub>🎯 Автор проекта</sub>
+      <sub>Автор проекта</sub>
     </td>
     <td align="center">
       <a href="https://github.com/anthropics">
         <img src="https://github.com/anthropics.png" width="80" style="border-radius:50%" alt="Claude"/><br/>
         <sub><b>Claude (Anthropic)</b></sub>
       </a><br/>
-      <sub>🤖 AI co-author</sub>
+      <sub>AI co-author</sub>
     </td>
     <td align="center">
       <a href="https://github.com/jlowin">
         <img src="https://github.com/jlowin.png" width="80" style="border-radius:50%" alt="jlowin"/><br/>
         <sub><b>Jeremiah Lowin</b></sub>
       </a><br/>
-      <sub>⚡ Автор <a href="https://github.com/jlowin/fastmcp">FastMCP</a></sub>
+      <sub>Автор <a href="https://github.com/jlowin/fastmcp">FastMCP</a></sub>
     </td>
   </tr>
 </table>
 
 ---
 
-## 📄 Лицензия
+## Лицензия
 
 MIT
 
 ---
 
-## 💳 Поддержать проект
+## Поддержать проект
 
-Если проект оказался полезен, можете поддержать автора 🙏
+Если проект оказался полезен, можете поддержать автора
 
-| 🏦 Сбербанк | `2202 2054 0027 9540` |
+| Сбербанк | `2202 2054 0027 9540` |
 |:---------|:----------------------|
-| 👤 Получатель | Сухов Андрей Евгеньевич |
+| Получатель | Сухов Андрей Евгеньевич |
 
 ---
 
@@ -420,5 +396,5 @@ MIT
     <img src="https://img.shields.io/badge/YouTube-@svhovbase-FF0000?style=flat-square&logo=youtube&logoColor=white" alt="YouTube" />
   </a>
   &nbsp;&nbsp;
-  ⭐ Если проект полезен — поставьте звезду!
+  Если проект полезен — поставьте звезду!
 </p>

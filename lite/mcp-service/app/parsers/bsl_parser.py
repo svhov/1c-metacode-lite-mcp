@@ -40,6 +40,33 @@ RE_ENDREGION = re.compile(r"^\s*#(?:КонецОбласти|EndRegion)", re.IGN
 
 RE_CALL = re.compile(r"\b(\w+)\s*\(")
 
+# Regex for metadata object references in BSL code (e.g. Справочники.Контрагенты)
+RE_METADATA_REF = re.compile(
+    r"\b("
+    r"Справочники|Документы|Перечисления|"
+    r"РегистрыСведений|РегистрыНакопления|РегистрыБухгалтерии|РегистрыРасчета|"
+    r"ПланыВидовХарактеристик|ПланыСчетов|ПланыВидовРасчета|"
+    r"БизнесПроцессы|Задачи|Константы|Обработки|Отчеты|"
+    r"Catalogs|Documents|Enums|InformationRegisters|AccumulationRegisters|"
+    r"AccountingRegisters|CalculationRegisters|ChartsOfCharacteristicTypes|"
+    r"ChartsOfAccounts|ChartsOfCalculationTypes|BusinessProcesses|Tasks|"
+    r"Constants|DataProcessors|Reports"
+    r")\.(\w+)\b"
+)
+
+# Built-in manager methods to skip (not object names)
+_BUILTIN_METHODS = frozenset({
+    "создать", "создатьэлемент", "создатьгруппу", "создатьдокумент",
+    "найтипокоду", "найтипонаименованию", "найтипоссылке", "найтипореквизиту",
+    "выбрать", "выбратьиерархически", "получить", "получитьформу",
+    "создатьнаборзаписей", "создатьменеджерзаписи",
+    "пустаяссылка", "получитьссылку", "получитьмакет",
+    "create", "createelement", "creategroup", "createdocument",
+    "findbycode", "findbyname", "findbyattribute",
+    "select", "get", "getform", "emptyref", "getref", "gettemplate",
+    "createrecordset", "createrecordmanager",
+})
+
 # SSL API markers in doc comments
 SSL_API_MARKERS = [
     "// СМ. ТАКЖЕ", "// см. также",
@@ -109,6 +136,22 @@ def _parse_params(params_str: str) -> list[dict]:
         else:
             params.append({"name": part.strip(), "default": None})
     return params
+
+
+def _extract_metadata_refs(body: str) -> list[tuple[str, str]]:
+    """Extract metadata object references from BSL body.
+
+    Returns list of (category, object_name) tuples.
+    E.g., ("Справочники", "Контрагенты") from ``Справочники.Контрагенты.НайтиПоКоду(...)``.
+    """
+    refs = set()
+    for m in RE_METADATA_REF.finditer(body):
+        category = m.group(1)
+        obj_name = m.group(2)
+        if obj_name.lower() in _BUILTIN_METHODS:
+            continue
+        refs.add((category, obj_name))
+    return list(refs)
 
 
 def _extract_calls(body: str, own_name: str) -> list[str]:
@@ -181,6 +224,7 @@ def parse_bsl_file(filepath: str, owner_qn: str, project_name: str, config_name:
 
             body = "\n".join(body_lines)
             calls = _extract_calls(body, name)
+            metadata_refs = _extract_metadata_refs(body)
 
             # Determine if SSL API
             is_ssl_api = export and any(
@@ -225,6 +269,7 @@ def parse_bsl_file(filepath: str, owner_qn: str, project_name: str, config_name:
                 "project_name": project_name,
                 "config_name": config_name,
                 "calls": calls,
+                "metadata_refs": metadata_refs,
                 **doc,
             })
 

@@ -7,6 +7,9 @@ from app.config import (
     PROJECT_NAME, CODE_DIR, METADATA_DIR,
     FULL_METADATA_RELOAD, LOAD_BSL_SIGNATURES,
     LOAD_FORMS_FROM_XML, LOAD_PREDEFINED_VALUES, LOAD_ROLE_RIGHTS,
+    ENABLE_EMBEDDING, EMBEDDING_MODEL_PATH, EMBEDDING_DB_PATH,
+    EMBEDDING_BATCH_SIZE, EMBEDDING_QUERY_PREFIX, EMBEDDING_PASSAGE_PREFIX,
+    RERANKER_MODEL_PATH,
 )
 from app.db.connection import run_query, run_write
 from app.db.indexes import ensure_indexes
@@ -489,18 +492,40 @@ def _build_used_in():
 
     # Type prefixes that indicate references to other metadata objects
     REF_PATTERN = re.compile(
-        r"(СправочникСсылка|ДокументСсылка|ПеречислениеСсылка|"
+        r"("
+        # Catalog/Document/Enum references
+        r"СправочникСсылка|ДокументСсылка|ПеречислениеСсылка|"
+        # Plans
         r"ПланВидовХарактеристикСсылка|ПланСчетовСсылка|ПланВидовРасчетаСсылка|"
+        # Business processes
         r"БизнесПроцессСсылка|ЗадачаСсылка|"
+        # Register record sets
         r"РегистрСведенийНаборЗаписей|РегистрНакопленияНаборЗаписей|"
-        r"CatalogRef|DocumentRef|EnumRef)\."
+        r"РегистрБухгалтерииНаборЗаписей|РегистрРасчетаНаборЗаписей|"
+        # Register record types
+        r"РегистрСведенийЗапись|РегистрНакопленияЗапись|"
+        # Register keys and managers
+        r"РегистрСведенийКлючЗаписи|"
+        r"РегистрСведенийМенеджер|РегистрНакопленияМенеджер|"
+        # English equivalents
+        r"CatalogRef|DocumentRef|EnumRef|"
+        r"ChartOfCharacteristicTypesRef|ChartOfAccountsRef|ChartOfCalculationTypesRef|"
+        r"InformationRegisterRecordSet|AccumulationRegisterRecordSet|"
+        r"AccountingRegisterRecordSet|CalculationRegisterRecordSet"
+        r")\."
         r"(\w+)"
     )
 
     # Get all nodes with type_info that contain references
     rows = run_query("""
         MATCH (owner:MetadataObject)-[]->(child)
-        WHERE child.type_info IS NOT NULL AND child.type_info CONTAINS 'Ссылка'
+        WHERE child.type_info IS NOT NULL
+          AND (child.type_info CONTAINS 'Ссылка'
+               OR child.type_info CONTAINS 'НаборЗаписей'
+               OR child.type_info CONTAINS 'Запись'
+               OR child.type_info CONTAINS 'Менеджер'
+               OR child.type_info CONTAINS 'Ref'
+               OR child.type_info CONTAINS 'RecordSet')
         RETURN DISTINCT owner.qualified_name AS owner_qn, child.type_info AS type_info
     """)
 
@@ -531,6 +556,306 @@ def _build_used_in():
     log.info("USED_IN edges created")
 
 
+# Map BSL plural category names -> metadata category names
+_BSL_CATEGORY_TO_META = {
+    "Справочники": "Справочники", "Документы": "Документы",
+    "Перечисления": "Перечисления",
+    "РегистрыСведений": "РегистрыСведений", "РегистрыНакопления": "РегистрыНакопления",
+    "РегистрыБухгалтерии": "РегистрыБухгалтерии", "РегистрыРасчета": "РегистрыРасчета",
+    "ПланыВидовХарактеристик": "ПланыВидовХарактеристик",
+    "ПланыСчетов": "ПланыСчетов", "ПланыВидовРасчета": "ПланыВидовРасчета",
+    "БизнесПроцессы": "БизнесПроцессы", "Задачи": "Задачи",
+    "Константы": "Константы", "Обработки": "Обработки", "Отчеты": "Отчеты",
+    "Catalogs": "Справочники", "Documents": "Документы", "Enums": "Перечисления",
+    "InformationRegisters": "РегистрыСведений", "AccumulationRegisters": "РегистрыНакопления",
+    "AccountingRegisters": "РегистрыБухгалтерии", "CalculationRegisters": "РегистрыРасчета",
+    "ChartsOfCharacteristicTypes": "ПланыВидовХарактеристик",
+    "ChartsOfAccounts": "ПланыСчетов", "ChartsOfCalculationTypes": "ПланыВидовРасчета",
+    "BusinessProcesses": "БизнесПроцессы", "Tasks": "Задачи",
+    "Constants": "Константы", "DataProcessors": "Обработки", "Reports": "Отчеты",
+}
+
+
+def _build_code_used_in(routines: list[dict]):
+    """Build USED_IN edges from BSL code metadata references."""
+    pairs = set()
+    for r in routines:
+        owner_parts = r["owner_qn"].split("/")
+        if len(owner_parts) < 4:
+            continue
+        owner_obj_qn = "/".join(owner_parts[:4])
+
+        for category_bsl, obj_name in r.get("metadata_refs", []):
+            meta_cat = _BSL_CATEGORY_TO_META.get(category_bsl)
+            if meta_cat:
+                pairs.add((owner_obj_qn, meta_cat, obj_name))
+
+    if not pairs:
+        return
+
+    log.info("Building %d code-based USED_IN edges...", len(pairs))
+    pair_list = [{"owner_qn": p[0], "cat": p[1], "ref_name": p[2]} for p in pairs]
+
+    for chunk in _chunk(pair_list, CHUNK_SIZE):
+        run_write("""
+            UNWIND $pairs AS p
+            MATCH (owner:MetadataObject {qualified_name: p.owner_qn})
+            MATCH (target:MetadataObject {name: p.ref_name, category_name: p.cat})
+            WHERE target.project_name = $project
+            MERGE (owner)-[:USED_IN {source: 'code'}]->(target)
+        """, {"pairs": chunk, "project": PROJECT_NAME})
+
+    log.info("Code-based USED_IN edges created")
+
+
+_RE_MOVEMENT = _re.compile(
+    r"\bДвижения\.(\w+)\s*\.\s*(Записать|Добавить|Записывать|Очистить|Write|Add|Clear)\b",
+    _re.IGNORECASE,
+)
+
+
+def _build_movements(routines: list[dict]):
+    """Build DO_MOVEMENTS_IN edges from Document -> Register patterns in BSL code."""
+    pairs = set()
+    for r in routines:
+        owner_parts = r["owner_qn"].split("/")
+        if len(owner_parts) < 4:
+            continue
+        # Only process document modules
+        if owner_parts[2] not in ("Documents", "Документы"):
+            continue
+
+        owner_obj_qn = "/".join(owner_parts[:4])
+        body = r.get("body", "")
+        for m in _RE_MOVEMENT.finditer(body):
+            register_name = m.group(1)
+            pairs.add((owner_obj_qn, register_name))
+
+    if not pairs:
+        log.info("No DO_MOVEMENTS_IN references found in BSL code")
+        return
+
+    log.info("Building %d DO_MOVEMENTS_IN edges...", len(pairs))
+    pair_list = [{"doc_qn": p[0], "reg_name": p[1]} for p in pairs]
+
+    for chunk in _chunk(pair_list, CHUNK_SIZE):
+        run_write("""
+            UNWIND $pairs AS p
+            MATCH (doc:MetadataObject {qualified_name: p.doc_qn})
+            MATCH (reg:MetadataObject {name: p.reg_name})
+            WHERE reg.project_name = $project
+              AND reg.category_name IN [
+                  'РегистрыСведений', 'РегистрыНакопления',
+                  'РегистрыБухгалтерии', 'РегистрыРасчета']
+            MERGE (doc)-[:DO_MOVEMENTS_IN]->(reg)
+        """, {"pairs": chunk, "project": PROJECT_NAME})
+
+    log.info("DO_MOVEMENTS_IN edges created")
+
+
+def _split_camel_case(name: str) -> str:
+    """Split CamelCase/underscore name into words for embedding.
+
+    АМЕ_ВидыОпераций → АМЕ Виды Операций
+    ДокументыПредприятия → Документы Предприятия
+    """
+    # Replace underscores with spaces
+    s = name.replace("_", " ")
+    # Insert space before uppercase letters that follow lowercase
+    result = []
+    for i, ch in enumerate(s):
+        if i > 0 and ch.isupper() and s[i - 1].islower():
+            result.append(" ")
+        result.append(ch)
+    return "".join(result)
+
+
+def _build_embeddings():
+    """Generate embeddings for routines and metadata objects with incremental updates."""
+    from app.services.embedding import init, get_embedder, get_store, text_hash
+
+    init(EMBEDDING_MODEL_PATH, EMBEDDING_DB_PATH,
+         reranker_path=RERANKER_MODEL_PATH,
+         query_prefix=EMBEDDING_QUERY_PREFIX,
+         passage_prefix=EMBEDDING_PASSAGE_PREFIX)
+    embedder = get_embedder()
+    store = get_store()
+    if embedder is None or store is None:
+        log.warning("Embedding service not available, skipping")
+        return
+
+    # --- Embed routines ---
+    rows = run_query("""
+        MATCH (r:Routine {project_name: $p})
+        RETURN r.id AS id, r.name AS name, r.signature AS signature,
+               r.doc_description AS doc_description,
+               r.params_text AS params_text,
+               r.owner_qn AS owner_qn, r.export AS export,
+               r.routine_type AS routine_type
+    """, {"p": PROJECT_NAME})
+
+    if rows:
+        existing_keys = store.get_all_keys("routines")
+        current_keys = set()
+        to_embed_rows = []
+        to_embed_texts = []
+
+        for r in rows:
+            key = r["id"]
+            current_keys.add(key)
+            parts = [_split_camel_case(r.get("name", ""))]
+            if r.get("doc_description"):
+                parts.append(r["doc_description"])
+            else:
+                # Auto-generate description from context
+                owner_qn = r.get("owner_qn", "")
+                owner = owner_qn.split("/")
+                rtype = r.get("routine_type", "Procedure")
+                if len(owner) >= 4:
+                    auto = f"{rtype} {_split_camel_case(r.get('name', ''))}. Модуль: {_split_camel_case(owner[3])}"
+                    params = r.get("params_text", "")
+                    if params:
+                        auto += f". Параметры: {params}"
+                    parts.append(auto)
+            if r.get("signature"):
+                parts.append(r["signature"])
+            if r.get("owner_qn"):
+                owner = r["owner_qn"].split("/")
+                if len(owner) >= 4:
+                    parts.append(f"{owner[2]} {owner[3]}")
+            text = " | ".join(parts)
+            th = text_hash(text)
+
+            # Skip if unchanged
+            if store.get_hash(key) == th:
+                continue
+            to_embed_rows.append((r, th))
+            to_embed_texts.append(text)
+
+        # Remove deleted routines
+        for old_key in existing_keys - current_keys:
+            store.remove(old_key)
+
+        if to_embed_texts:
+            log.info("Embedding %d routines (%d unchanged, %d removed)...",
+                     len(to_embed_texts), len(rows) - len(to_embed_texts),
+                     len(existing_keys - current_keys))
+            vectors = embedder.embed_passages(to_embed_texts, batch_size=EMBEDDING_BATCH_SIZE)
+            for (r, th), text, vec in zip(to_embed_rows, to_embed_texts, vectors):
+                store.add(r["id"], "routines", vec, {
+                    "name": r.get("name", ""),
+                    "signature": r.get("signature", ""),
+                    "description": r.get("doc_description", ""),
+                    "owner_qn": r.get("owner_qn", ""),
+                    "export": r.get("export", False),
+                    "routine_type": r.get("routine_type", ""),
+                }, text_hash=th, search_text=text)
+            log.info("Embedded %d routines", len(to_embed_texts))
+        else:
+            log.info("All %d routine embeddings up to date", len(rows))
+
+    # --- Embed metadata objects ---
+    # category + name (CamelCase split) + synonym + comment + top-5 attribute names
+    obj_rows = run_query("""
+        MATCH (mo:MetadataObject {project_name: $p})
+        RETURN mo.name AS name, mo.category_name AS category,
+               mo.Synonym AS synonym, mo.Comment AS comment,
+               mo.qualified_name AS qn
+    """, {"p": PROJECT_NAME})
+
+    # Pre-fetch: attribute names (max 5), USED_IN refs (max 5), enum values (max 5)
+    attr_map = {}
+    attr_rows = run_query("""
+        MATCH (mo:MetadataObject {project_name: $p})-[:HAS_ATTRIBUTE]->(a:Attribute)
+        RETURN mo.qualified_name AS qn, a.name AS name
+    """, {"p": PROJECT_NAME})
+    for ar in attr_rows:
+        lst = attr_map.setdefault(ar["qn"], [])
+        if len(lst) < 5:
+            lst.append(ar["name"])
+
+    ref_map = {}
+    ref_rows = run_query("""
+        MATCH (other:MetadataObject)-[:USED_IN]->(mo:MetadataObject {project_name: $p})
+        RETURN mo.qualified_name AS qn, other.name AS name
+    """, {"p": PROJECT_NAME})
+    for rr in ref_rows:
+        lst = ref_map.setdefault(rr["qn"], [])
+        if len(lst) < 5:
+            lst.append(rr["name"])
+
+    enum_map = {}
+    enum_rows = run_query("""
+        MATCH (mo:MetadataObject {project_name: $p})-[:HAS_ENUM_VALUE]->(ev:EnumValue)
+        RETURN mo.qualified_name AS qn, ev.name AS name
+    """, {"p": PROJECT_NAME})
+    for er in enum_rows:
+        lst = enum_map.setdefault(er["qn"], [])
+        if len(lst) < 5:
+            lst.append(er["name"])
+
+    if obj_rows:
+        existing_keys = store.get_all_keys("objects")
+        current_keys = set()
+        to_embed_rows = []
+        to_embed_texts = []
+
+        for o in obj_rows:
+            key = o["qn"]
+            current_keys.add(key)
+            parts = []
+            if o.get("category"):
+                parts.append(o["category"])
+            name = o.get("name", "")
+            name_split = _split_camel_case(name)
+            parts.append(name_split)
+            if o.get("synonym"):
+                parts.append(o["synonym"])
+            if o.get("comment"):
+                parts.append(o["comment"])
+            # Top-5 attribute names
+            obj_attrs = attr_map.get(key, [])
+            if obj_attrs:
+                parts.append("Реквизиты: " + ", ".join(_split_camel_case(a) for a in obj_attrs))
+            # Enum values (for Перечисления)
+            obj_enums = enum_map.get(key, [])
+            if obj_enums:
+                parts.append("Значения: " + ", ".join(_split_camel_case(e) for e in obj_enums))
+            # Who uses this object (max 5)
+            obj_refs = ref_map.get(key, [])
+            if obj_refs:
+                parts.append("Используется в: " + ", ".join(obj_refs))
+            text = " | ".join(parts)
+            th = text_hash(text)
+
+            if store.get_hash(key) == th:
+                continue
+            to_embed_rows.append((o, th))
+            to_embed_texts.append(text)
+
+        for old_key in existing_keys - current_keys:
+            store.remove(old_key)
+
+        if to_embed_texts:
+            log.info("Embedding %d metadata objects (%d unchanged, %d removed)...",
+                     len(to_embed_texts), len(obj_rows) - len(to_embed_texts),
+                     len(existing_keys - current_keys))
+            vectors = embedder.embed_passages(to_embed_texts, batch_size=EMBEDDING_BATCH_SIZE)
+            for (o, th), text, vec in zip(to_embed_rows, to_embed_texts, vectors):
+                store.add(o["qn"], "objects", vec, {
+                    "name": o.get("name", ""),
+                    "category": o.get("category", ""),
+                    "synonym": o.get("synonym", ""),
+                    "comment": o.get("comment", ""),
+                }, text_hash=th, search_text=text)
+            log.info("Embedded %d metadata objects", len(to_embed_texts))
+        else:
+            log.info("All %d object embeddings up to date", len(obj_rows))
+
+    log.info("Embedding complete: %d routines, %d objects in vector store",
+             store.count("routines"), store.count("objects"))
+
+
 def load_all():
     """Main entry point — load all data for this project."""
     log.info("=" * 60)
@@ -547,6 +872,13 @@ def load_all():
         )
         cnt = result[0]["cnt"] if result else 0
         log.info("[OK] Project metadata already loaded (%d objects)", cnt)
+        # Still initialize embedding service (models + sqlite-vec)
+        if ENABLE_EMBEDDING:
+            from app.services.embedding import init
+            init(EMBEDDING_MODEL_PATH, EMBEDDING_DB_PATH,
+                 reranker_path=RERANKER_MODEL_PATH,
+                 query_prefix=EMBEDDING_QUERY_PREFIX,
+                 passage_prefix=EMBEDDING_PASSAGE_PREFIX)
         return
 
     if FULL_METADATA_RELOAD:
@@ -572,6 +904,7 @@ def load_all():
         _load_guid_map(guid_map)
 
     # 3. BSL routines
+    routines = []
     if LOAD_BSL_SIGNATURES and os.path.isdir(CODE_DIR):
         routines = scan_bsl_files(CODE_DIR, PROJECT_NAME, config.config_name)
         if routines:
@@ -597,6 +930,18 @@ def load_all():
 
     # 7. Build USED_IN relationships from type references
     _build_used_in()
+
+    # 7b. Build USED_IN from BSL code references
+    if routines:
+        _build_code_used_in(routines)
+
+    # 7c. Build DO_MOVEMENTS_IN from document module code
+    if routines:
+        _build_movements(routines)
+
+    # 8. Build embeddings (optional)
+    if ENABLE_EMBEDDING:
+        _build_embeddings()
 
     # Final stats
     stats = run_query("""

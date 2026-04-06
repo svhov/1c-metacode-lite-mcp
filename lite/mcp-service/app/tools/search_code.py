@@ -44,7 +44,18 @@ def _find_by_description(req):
     params = {"p": PROJECT_NAME, "text": text}
 
     if text:
-        conditions.append("(r.doc_description CONTAINS $text OR r.name CONTAINS $text)")
+        # Split into words for better matching: "электронная подпись" → each word
+        words = [w.strip() for w in text.split() if len(w.strip()) >= 3]
+        if len(words) > 1:
+            word_conds = " OR ".join(
+                f"r.doc_description CONTAINS $w{i} OR r.name CONTAINS $w{i}"
+                for i in range(len(words))
+            )
+            for i, w in enumerate(words):
+                params[f"w{i}"] = w
+            conditions.append(f"({word_conds})")
+        else:
+            conditions.append("(r.doc_description CONTAINS $text OR r.name CONTAINS $text)")
     if owner:
         conditions.append("r.owner_qn CONTAINS $owner")
         params["owner"] = owner

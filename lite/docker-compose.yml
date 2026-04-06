@@ -18,10 +18,99 @@ services:
       retries: 10
       start_period: 5s
 
-  # ── Example: single project ─────────────────────────────────────────
-  # Copy this block and change PROJECT_NAME, ports, and volume path
-  # for each 1C configuration you want to serve.
+  # ── Документооборот (основная конфигурация) ───────────────────────
+  1c-metacode-do_main:
+    image: svhov/1c-metacode-lite
+    build: ./mcp-service
+    restart: unless-stopped
+    ports:
+      - "6004:6001"
+    volumes:
+      - C:\sukhov_ae\1c-metacode-mcp\do_main:/app/data
+    environment:
+      - PROJECT_NAME=do_main
+      - MEMGRAPH_URI=bolt://memgraph:7687
+      - MCP_PORT=6001
+      - FULL_METADATA_RELOAD=false
+      - LOAD_BSL_SIGNATURES=true
+      - LOAD_FORMS_FROM_XML=true
+      - LOAD_PREDEFINED_VALUES=true
+      - LOAD_ROLE_RIGHTS=true
+      - ENABLE_EMBEDDING=true
+    depends_on:
+      memgraph:
+        condition: service_healthy
 
+  # ── Документооборот (расширение АМЕ) ─────────────────────────────
+  1c-metacode-do_ame:
+    image: svhov/1c-metacode-lite
+    build: ./mcp-service
+    restart: unless-stopped
+    ports:
+      - "6005:6001"
+    volumes:
+      - C:\sukhov_ae\1c-metacode-mcp\do_ame:/app/data
+    environment:
+      - PROJECT_NAME=do_ame
+      - MEMGRAPH_URI=bolt://memgraph:7687
+      - MCP_PORT=6001
+      - FULL_METADATA_RELOAD=false
+      - LOAD_BSL_SIGNATURES=true
+      - LOAD_FORMS_FROM_XML=true
+      - LOAD_PREDEFINED_VALUES=true
+      - LOAD_ROLE_RIGHTS=true
+      - ENABLE_EMBEDDING=true
+    depends_on:
+      memgraph:
+        condition: service_healthy
+
+  # ── ERP (расширение АМЕ) ─────────────────────────────────────────
+  1c-metacode-erp_ame_do:
+    image: svhov/1c-metacode-lite
+    build: ./mcp-service
+    restart: unless-stopped
+    ports:
+      - "6002:6001"
+    volumes:
+      - C:\sukhov_ae\1c-metacode-mcp\erp_ame_do:/app/data
+    environment:
+      - PROJECT_NAME=erp_ame_do
+      - MEMGRAPH_URI=bolt://memgraph:7687
+      - MCP_PORT=6001
+      - FULL_METADATA_RELOAD=false
+      - LOAD_BSL_SIGNATURES=true
+      - LOAD_FORMS_FROM_XML=true
+      - LOAD_PREDEFINED_VALUES=true
+      - LOAD_ROLE_RIGHTS=true
+      - ENABLE_EMBEDDING=true
+    depends_on:
+      memgraph:
+        condition: service_healthy
+
+  # ── SSL 3 (Библиотека стандартных подсистем) ──────────────────────
+  1c-metacode-ssl3:
+    image: svhov/1c-metacode-lite
+    build: ./mcp-service
+    restart: unless-stopped
+    ports:
+      - "6003:6001"
+    volumes:
+      - C:\sukhov_ae\1c-metacode-mcp\ssl3:/app/data
+    environment:
+      - PROJECT_NAME=ssl3
+      - MEMGRAPH_URI=bolt://memgraph:7687
+      - MCP_PORT=6001
+      - FULL_METADATA_RELOAD=false
+      - LOAD_BSL_SIGNATURES=true
+      - LOAD_FORMS_FROM_XML=true
+      - LOAD_PREDEFINED_VALUES=true
+      - LOAD_ROLE_RIGHTS=true
+      - ENABLE_EMBEDDING=true
+    depends_on:
+      memgraph:
+        condition: service_healthy
+
+  # ── ERP (основная конфигурация) ──────────────────────────────────────
   1c-metacode-erp_main:
     image: svhov/1c-metacode-lite
     build: ./mcp-service
@@ -29,38 +118,20 @@ services:
     ports:
       - "6001:6001"
     volumes:
-      - /path/to/erp_main:/app/data          # <-- set your local path
+      - C:\sukhov_ae\1c-metacode-mcp\erp_main:/app/data
     environment:
       - PROJECT_NAME=erp_main
       - MEMGRAPH_URI=bolt://memgraph:7687
       - MCP_PORT=6001
-      - FULL_METADATA_RELOAD=true
+      - FULL_METADATA_RELOAD=false
       - LOAD_BSL_SIGNATURES=true
       - LOAD_FORMS_FROM_XML=true
       - LOAD_PREDEFINED_VALUES=true
       - LOAD_ROLE_RIGHTS=true
+      - ENABLE_EMBEDDING=true
     depends_on:
       memgraph:
         condition: service_healthy
-
-  # ── Add more projects below ─────────────────────────────────────────
-  #
-  # 1c-metacode-ssl3:
-  #   image: svhov/1c-metacode-lite
-  #   build: ./mcp-service
-  #   restart: unless-stopped
-  #   ports:
-  #     - "6003:6001"
-  #   volumes:
-  #     - /path/to/ssl3:/app/data
-  #   environment:
-  #     - PROJECT_NAME=ssl3
-  #     - MEMGRAPH_URI=bolt://memgraph:7687
-  #     - MCP_PORT=6001
-  #     - FULL_METADATA_RELOAD=true
-  #   depends_on:
-  #     memgraph:
-  #       condition: service_healthy
 
 volumes:
   memgraph_data:

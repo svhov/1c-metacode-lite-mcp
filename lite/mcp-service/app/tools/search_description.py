@@ -16,7 +16,6 @@ def handle_search_description(query: str) -> str:
     except json.JSONDecodeError:
         return json.dumps({"error": "Invalid JSON"}, ensure_ascii=False)
 
-    op = req.get("op", "search_metadata_by_description")
     text = req.get("text", req.get("description", req.get("query", "")))
     category = req.get("category", "")
     limit = req.get("limit", 20)
@@ -26,26 +25,31 @@ def handle_search_description(query: str) -> str:
 
     try:
         conditions = ["mo.project_name = $p"]
-        params = {"p": PROJECT_NAME, "text": text, "limit": limit}
+        params = {"p": PROJECT_NAME, "limit": limit}
 
-        # Case-insensitive search: Memgraph toLower() doesn't handle Cyrillic,
-        # so we search with multiple case variants from Python.
-        # Also try stem prefix (drop last 1-2 chars) for basic morphology:
-        # "премия" -> also try "преми" to match "Премии", "Премирование"
-        variants = {text, text.lower(), text.capitalize(), text.upper()}
-        if len(text) >= 4:
-            variants.add(text[:-1])            # drop last char
-            variants.add(text[:-1].capitalize())
-            if len(text) >= 5:
-                variants.add(text[:-2])        # drop last 2 chars
-                variants.add(text[:-2].capitalize())
-        variant_list = list(variants)
+        # Split query into individual words for matching CamelCase names
+        # "документы предприятия" → each word matches independently against
+        # ДокументыПредприятия (because "документ" CONTAINS works on CamelCase)
+        words = [w.strip() for w in text.split() if len(w.strip()) >= 3]
+        if not words:
+            words = [text]
+
+        # Build variants for each word: original + stem (drop 1-2 chars for morphology)
+        all_variants = set()
+        for word in words:
+            all_variants.add(word)
+            all_variants.add(word.lower())
+            all_variants.add(word.capitalize())
+            if len(word) >= 4:
+                all_variants.add(word[:-1])
+                all_variants.add(word[:-1].capitalize())
+                if len(word) >= 5:
+                    all_variants.add(word[:-2])
+                    all_variants.add(word[:-2].capitalize())
+
+        variant_list = list(all_variants)
         params["variants"] = variant_list
-        # Build OR conditions for each variant
-        name_conds = " OR ".join(f"mo.name CONTAINS v" for _ in variant_list)
-        syn_conds = " OR ".join(f"mo.Synonym CONTAINS v" for _ in variant_list)
-        cmt_conds = " OR ".join(f"mo.Comment CONTAINS v" for _ in variant_list)
-        # Use UNWIND + ANY pattern for Memgraph compatibility
+
         conditions.append(
             "ANY(v IN $variants WHERE mo.name CONTAINS v "
             "OR (mo.Synonym IS NOT NULL AND mo.Synonym CONTAINS v) "
