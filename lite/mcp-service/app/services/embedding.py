@@ -362,6 +362,88 @@ class SqliteVecStore:
             )
             self._conn.commit()
 
+    def add_many(self, collection: str,
+                 items: list[tuple[str, dict, str, str]],
+                 vectors: list[list[float]]):
+        """Bulk insert/update — single transaction per chunk.
+
+        items: list of (key, metadata, text_hash, search_text)
+        vectors: aligned list of embedding vectors
+
+        Designed for streaming pipelines where memory is bounded by chunk size.
+        Avoids one-commit-per-row overhead of add() in tight loops.
+        """
+        if not items:
+            return
+        with self._lock:
+            for (key, metadata, th, search_text), vec in zip(items, vectors):
+                extra = json.dumps(
+                    {k: v for k, v in metadata.items()
+                     if k not in ("name", "category", "synonym", "owner_qn")},
+                    ensure_ascii=False)
+                name = metadata.get("name", "")
+                category = metadata.get("category", "")
+                synonym = metadata.get("synonym", "")
+                owner_qn = metadata.get("owner_qn", "")
+
+                row = self._conn.execute(
+                    "SELECT rowid FROM vec_items WHERE key = ?", (key,)
+                ).fetchone()
+
+                if row:
+                    rid = row[0]
+                    old_text_row = self._conn.execute(
+                        "SELECT search_text FROM vec_items WHERE rowid=?", (rid,)
+                    ).fetchone()
+                    if old_text_row:
+                        self._conn.execute(
+                            "INSERT INTO vec_fts(vec_fts, rowid, key, collection, search_text) "
+                            "VALUES('delete', ?, ?, ?, ?)",
+                            (rid, key, collection, old_text_row[0])
+                        )
+                    self._conn.execute(
+                        "UPDATE vec_items SET collection=?, name=?, category=?, "
+                        "synonym=?, owner_qn=?, extra_json=?, text_hash=?, search_text=? "
+                        "WHERE rowid=?",
+                        (collection, name, category, synonym, owner_qn, extra, th,
+                         search_text, rid)
+                    )
+                    self._conn.execute(
+                        "UPDATE vec_index SET embedding = ? WHERE rowid = ?",
+                        (_serialize_f32(vec), rid)
+                    )
+                else:
+                    cur = self._conn.execute(
+                        "INSERT INTO vec_items (key, collection, name, category, synonym, "
+                        "owner_qn, extra_json, text_hash, search_text) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (key, collection, name, category, synonym, owner_qn, extra, th,
+                         search_text)
+                    )
+                    rid = cur.lastrowid
+                    self._conn.execute(
+                        "INSERT INTO vec_index (rowid, embedding) VALUES (?, ?)",
+                        (rid, _serialize_f32(vec))
+                    )
+
+                self._conn.execute(
+                    "INSERT INTO vec_fts(rowid, key, collection, search_text) VALUES(?, ?, ?, ?)",
+                    (rid, key, collection, search_text)
+                )
+            self._conn.commit()
+
+    def get_all_hashes(self, collection: str) -> dict[str, str]:
+        """Return {key: text_hash} for an entire collection in one query.
+
+        Used by streaming embedding pipelines to skip unchanged rows
+        without paying for one SELECT per row.
+        """
+        rows = self._conn.execute(
+            "SELECT key, text_hash FROM vec_items WHERE collection = ?",
+            (collection,)
+        ).fetchall()
+        return {key: th for key, th in rows}
+
     def search(self, query_vector: list[float], collection: str,
                top_k: int = 15) -> list[dict]:
         query_bytes = _serialize_f32(query_vector)

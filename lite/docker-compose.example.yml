@@ -1,0 +1,124 @@
+name: 1c-metacode-lite
+
+# ─────────────────────────────────────────────────────────────────────
+# Шаблон docker-compose для 1C Metacode MCP Lite.
+#
+# Скопируй этот файл в `lite/docker-compose.yml` и поправь под себя:
+#   1. Подставь свои пути к данным проекта вместо /path/to/data/<project>
+#      (это директория с metadata/ОтчетПоКонфигурации.txt + code/)
+#   2. Оставь только нужные сервисы — можно начать с одного и добавлять
+#      по мере необходимости.
+#   3. При необходимости поменяй проброшенные порты, если 600x уже заняты.
+#
+# Архитектура:
+#   - один общий контейнер `memgraph` (графовая БД)
+#   - по одному `1c-metacode-<project>` сервису на каждую 1С-конфигурацию
+#   - все MCP-сервисы шарят memgraph, изолируются полем PROJECT_NAME
+#
+# Подробности — README.md и CLAUDE.md.
+# ─────────────────────────────────────────────────────────────────────
+
+services:
+  memgraph:
+    image: memgraph/memgraph:latest
+    restart: unless-stopped
+    ports:
+      - "7687:7687"   # Bolt protocol (Neo4j-compatible)
+      - "7444:7444"   # Memgraph monitoring
+    volumes:
+      - memgraph_data:/var/lib/memgraph
+    environment:
+      - MEMGRAPH_ARGS=--memory-limit=512 --log-level=WARNING
+    healthcheck:
+      test: ["CMD-SHELL", "echo 'RETURN 1;' | mgconsole || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  # ── Пример: Документооборот (основная конфигурация) ──────────────
+  1c-metacode-do_main:
+    image: svhov/1c-metacode-lite
+    build: ./mcp-service
+    restart: unless-stopped
+    ports:
+      - "6004:6001"   # внешний порт для подключения MCP-клиента
+    volumes:
+      # Замени на свой путь до выгруженной 1С-конфигурации:
+      #   /path/to/data/do_main/
+      #   ├── metadata/ОтчетПоКонфигурации.txt
+      #   └── code/   (BSL + XML дамп конфигурации)
+      - /path/to/data/do_main:/app/data
+    environment:
+      - PROJECT_NAME=do_main          # уникальное имя проекта в Memgraph
+      - MEMGRAPH_URI=bolt://memgraph:7687
+      - MCP_PORT=6001
+      - FULL_METADATA_RELOAD=false    # true — пересоздать граф при старте
+      - LOAD_BSL_SIGNATURES=true      # парсить BSL: процедуры, функции, вызовы
+      - LOAD_FORMS_FROM_XML=true      # парсить Form.xml: элементы, события
+      - LOAD_PREDEFINED_VALUES=true   # парсить Predefined.xml
+      - LOAD_ROLE_RIGHTS=true         # парсить Rights.xml
+      - ENABLE_EMBEDDING=true         # включить семантический поиск (ONNX e5-base)
+      # Опциональные тюнинги embedding'а:
+      # - EMBEDDING_STREAM_CHUNK=2000  # размер чанка streaming-индексации
+      # - EMBEDDING_BATCH_SIZE=64      # inner batch size для ONNX
+      # - SSE_PING_INTERVAL=10         # keep-alive пинг SSE-соединения, сек
+      # - HEARTBEAT_LOG_INTERVAL=30    # heartbeat в docker logs (после индексации), сек
+    depends_on:
+      memgraph:
+        condition: service_healthy
+
+  # ── Пример: Документооборот (расширение) ─────────────────────────
+  # Раскомментируй и подставь свои пути, чтобы добавить второй проект.
+  #
+  # 1c-metacode-do_ext:
+  #   image: svhov/1c-metacode-lite
+  #   build: ./mcp-service
+  #   restart: unless-stopped
+  #   ports:
+  #     - "6005:6001"
+  #   volumes:
+  #     - /path/to/data/do_ext:/app/data
+  #   environment:
+  #     - PROJECT_NAME=do_ext
+  #     - MEMGRAPH_URI=bolt://memgraph:7687
+  #     - MCP_PORT=6001
+  #     - FULL_METADATA_RELOAD=false
+  #     - LOAD_BSL_SIGNATURES=true
+  #     - LOAD_FORMS_FROM_XML=true
+  #     - LOAD_PREDEFINED_VALUES=true
+  #     - LOAD_ROLE_RIGHTS=true
+  #     - ENABLE_EMBEDDING=true
+  #   depends_on:
+  #     memgraph:
+  #       condition: service_healthy
+
+  # ── Пример: ERP (большая база, ~600k+ рутин) ─────────────────────
+  # Для очень больших баз embedding идёт долго (часы), но streaming
+  # pipeline ограничивает RAM ~2.5 ГБ и поддерживает resume при рестарте.
+  #
+  # 1c-metacode-erp_main:
+  #   image: svhov/1c-metacode-lite
+  #   build: ./mcp-service
+  #   restart: unless-stopped
+  #   ports:
+  #     - "6001:6001"
+  #   volumes:
+  #     - /path/to/data/erp_main:/app/data
+  #   environment:
+  #     - PROJECT_NAME=erp_main
+  #     - MEMGRAPH_URI=bolt://memgraph:7687
+  #     - MCP_PORT=6001
+  #     - FULL_METADATA_RELOAD=false
+  #     - LOAD_BSL_SIGNATURES=true
+  #     - LOAD_FORMS_FROM_XML=true
+  #     - LOAD_PREDEFINED_VALUES=true
+  #     - LOAD_ROLE_RIGHTS=true
+  #     - ENABLE_EMBEDDING=true
+  #   depends_on:
+  #     memgraph:
+  #       condition: service_healthy
+
+volumes:
+  memgraph_data:
+    driver: local

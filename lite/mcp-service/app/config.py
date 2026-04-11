@@ -13,6 +13,9 @@ LOAD_ROLE_RIGHTS = os.environ.get("LOAD_ROLE_RIGHTS", "true").lower() in ("true"
 ENABLE_EMBEDDING = os.environ.get("ENABLE_EMBEDDING", "false").lower() in ("true", "1", "yes")
 EMBEDDING_MODEL_PATH = os.environ.get("EMBEDDING_MODEL_PATH", "/app/models/e5-base")
 EMBEDDING_BATCH_SIZE = int(os.environ.get("EMBEDDING_BATCH_SIZE", "64"))
+# Streaming chunk: how many texts to embed → write → free per iteration.
+# Bounds peak RAM during embedding of huge bases (e.g. 600k+ routines).
+EMBEDDING_STREAM_CHUNK = int(os.environ.get("EMBEDDING_STREAM_CHUNK", "2000"))
 EMBEDDING_QUERY_PREFIX = os.environ.get("EMBEDDING_QUERY_PREFIX", "query: ")
 EMBEDDING_PASSAGE_PREFIX = os.environ.get("EMBEDDING_PASSAGE_PREFIX", "passage: ")
 RERANKER_MODEL_PATH = os.environ.get("RERANKER_MODEL_PATH", "/app/models/cross-encoder")

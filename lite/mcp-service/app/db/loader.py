@@ -8,7 +8,8 @@ from app.config import (
     FULL_METADATA_RELOAD, LOAD_BSL_SIGNATURES,
     LOAD_FORMS_FROM_XML, LOAD_PREDEFINED_VALUES, LOAD_ROLE_RIGHTS,
     ENABLE_EMBEDDING, EMBEDDING_MODEL_PATH, EMBEDDING_DB_PATH,
-    EMBEDDING_BATCH_SIZE, EMBEDDING_QUERY_PREFIX, EMBEDDING_PASSAGE_PREFIX,
+    EMBEDDING_BATCH_SIZE, EMBEDDING_STREAM_CHUNK,
+    EMBEDDING_QUERY_PREFIX, EMBEDDING_PASSAGE_PREFIX,
     RERANKER_MODEL_PATH,
 )
 from app.db.connection import run_query, run_write
@@ -469,17 +470,30 @@ def _load_roles(grants: list[dict], config_name: str):
 
 
 def _load_guid_map(guid_map: dict[str, str]):
-    """Store GUID mapping on existing nodes."""
+    """Store GUID mapping on existing nodes (batched for performance)."""
     log.info("Mapping %d GUIDs...", len(guid_map))
+    BATCH_SIZE = 500
+    batch = []
     for name, uid in guid_map.items():
-        # name format: Catalog.ObjectName or Catalog.ObjectName.Attribute.AttrName
         parts = name.split(".")
         obj_name = parts[1] if len(parts) >= 2 else parts[0]
+        batch.append({"name": obj_name, "uid": uid})
+        if len(batch) >= BATCH_SIZE:
+            run_write("""
+                UNWIND $batch AS item
+                MATCH (n {name: item.name})
+                WHERE n.project_name = $project
+                SET n.guid = item.uid
+            """, {"batch": batch, "project": PROJECT_NAME})
+            batch = []
+    if batch:
         run_write("""
-            MATCH (n {name: $name})
+            UNWIND $batch AS item
+            MATCH (n {name: item.name})
             WHERE n.project_name = $project
-            SET n.guid = $uid
-        """, {"name": obj_name, "project": PROJECT_NAME, "uid": uid})
+            SET n.guid = item.uid
+        """, {"batch": batch, "project": PROJECT_NAME})
+    log.info("GUID mapping complete")
 
 
 def _build_used_in():
@@ -670,8 +684,52 @@ def _split_camel_case(name: str) -> str:
     return "".join(result)
 
 
+def _build_routine_text(r) -> str:
+    """Compose embedding text for a routine row."""
+    parts = [_split_camel_case(r.get("name", ""))]
+    if r.get("doc_description"):
+        parts.append(r["doc_description"])
+    else:
+        owner_qn = r.get("owner_qn", "")
+        owner = owner_qn.split("/")
+        rtype = r.get("routine_type", "Procedure")
+        if len(owner) >= 4:
+            auto = (f"{rtype} {_split_camel_case(r.get('name', ''))}. "
+                    f"Модуль: {_split_camel_case(owner[3])}")
+            params = r.get("params_text", "")
+            if params:
+                auto += f". Параметры: {params}"
+            parts.append(auto)
+    if r.get("signature"):
+        parts.append(r["signature"])
+    if r.get("owner_qn"):
+        owner = r["owner_qn"].split("/")
+        if len(owner) >= 4:
+            parts.append(f"{owner[2]} {owner[3]}")
+    return " | ".join(parts)
+
+
+def _adaptive_inner_batch(texts: list[str]) -> int:
+    """Reduce inner batch_size when texts are long, to bound peak memory in ONNX."""
+    if not texts:
+        return EMBEDDING_BATCH_SIZE
+    avg = sum(len(t) for t in texts) / len(texts)
+    if avg < 800:
+        return EMBEDDING_BATCH_SIZE
+    if avg < 2000:
+        return max(16, EMBEDDING_BATCH_SIZE // 2)
+    return max(8, EMBEDDING_BATCH_SIZE // 4)
+
+
 def _build_embeddings():
-    """Generate embeddings for routines and metadata objects with incremental updates."""
+    """Generate embeddings for routines and metadata objects.
+
+    Streaming pipeline: reads rows from Memgraph, embeds in chunks of
+    EMBEDDING_STREAM_CHUNK, writes each chunk to sqlite-vec under one
+    transaction, then frees buffers. Bounded RAM regardless of total count;
+    crash-resilient because each committed chunk is durable on restart
+    (resume happens automatically via text_hash skip).
+    """
     from app.services.embedding import init, get_embedder, get_store, text_hash
 
     init(EMBEDDING_MODEL_PATH, EMBEDDING_DB_PATH,
@@ -684,7 +742,7 @@ def _build_embeddings():
         log.warning("Embedding service not available, skipping")
         return
 
-    # --- Embed routines ---
+    # --- Embed routines (streaming) ---
     rows = run_query("""
         MATCH (r:Routine {project_name: $p})
         RETURN r.id AS id, r.name AS name, r.signature AS signature,
@@ -695,75 +753,77 @@ def _build_embeddings():
     """, {"p": PROJECT_NAME})
 
     if rows:
-        existing_keys = store.get_all_keys("routines")
+        total = len(rows)
+        existing_hashes = store.get_all_hashes("routines")
         current_keys = set()
-        to_embed_rows = []
-        to_embed_texts = []
+        pending_items: list[tuple[str, dict, str, str]] = []
+        pending_texts: list[str] = []
+        embedded = 0
+        skipped = 0
+        seen = 0
 
+        def flush_routines():
+            nonlocal embedded
+            if not pending_texts:
+                return
+            inner = _adaptive_inner_batch(pending_texts)
+            vectors = embedder.embed_passages(pending_texts, batch_size=inner)
+            store.add_many("routines", pending_items, vectors)
+            embedded += len(pending_texts)
+            log.info("Embedded routines: %d/%d (skipped=%d, chunk=%d, inner_batch=%d)",
+                     embedded + skipped, total, skipped, len(pending_texts), inner)
+            pending_items.clear()
+            pending_texts.clear()
+
+        log.info("Embedding routines: total=%d, chunk=%d, model=e5-base",
+                 total, EMBEDDING_STREAM_CHUNK)
         for r in rows:
+            seen += 1
             key = r["id"]
             current_keys.add(key)
-            parts = [_split_camel_case(r.get("name", ""))]
-            if r.get("doc_description"):
-                parts.append(r["doc_description"])
-            else:
-                # Auto-generate description from context
-                owner_qn = r.get("owner_qn", "")
-                owner = owner_qn.split("/")
-                rtype = r.get("routine_type", "Procedure")
-                if len(owner) >= 4:
-                    auto = f"{rtype} {_split_camel_case(r.get('name', ''))}. Модуль: {_split_camel_case(owner[3])}"
-                    params = r.get("params_text", "")
-                    if params:
-                        auto += f". Параметры: {params}"
-                    parts.append(auto)
-            if r.get("signature"):
-                parts.append(r["signature"])
-            if r.get("owner_qn"):
-                owner = r["owner_qn"].split("/")
-                if len(owner) >= 4:
-                    parts.append(f"{owner[2]} {owner[3]}")
-            text = " | ".join(parts)
+            text = _build_routine_text(r)
             th = text_hash(text)
-
-            # Skip if unchanged
-            if store.get_hash(key) == th:
+            if existing_hashes.get(key) == th:
+                skipped += 1
                 continue
-            to_embed_rows.append((r, th))
-            to_embed_texts.append(text)
+            metadata = {
+                "name": r.get("name", ""),
+                "signature": r.get("signature", ""),
+                "description": r.get("doc_description", ""),
+                "owner_qn": r.get("owner_qn", ""),
+                "export": r.get("export", False),
+                "routine_type": r.get("routine_type", ""),
+            }
+            pending_items.append((key, metadata, th, text))
+            pending_texts.append(text)
+            if len(pending_items) >= EMBEDDING_STREAM_CHUNK:
+                flush_routines()
+        flush_routines()
 
         # Remove deleted routines
-        for old_key in existing_keys - current_keys:
+        removed = 0
+        for old_key in set(existing_hashes) - current_keys:
             store.remove(old_key)
-
-        if to_embed_texts:
-            log.info("Embedding %d routines (%d unchanged, %d removed)...",
-                     len(to_embed_texts), len(rows) - len(to_embed_texts),
-                     len(existing_keys - current_keys))
-            vectors = embedder.embed_passages(to_embed_texts, batch_size=EMBEDDING_BATCH_SIZE)
-            for (r, th), text, vec in zip(to_embed_rows, to_embed_texts, vectors):
-                store.add(r["id"], "routines", vec, {
-                    "name": r.get("name", ""),
-                    "signature": r.get("signature", ""),
-                    "description": r.get("doc_description", ""),
-                    "owner_qn": r.get("owner_qn", ""),
-                    "export": r.get("export", False),
-                    "routine_type": r.get("routine_type", ""),
-                }, text_hash=th, search_text=text)
-            log.info("Embedded %d routines", len(to_embed_texts))
-        else:
-            log.info("All %d routine embeddings up to date", len(rows))
+            removed += 1
+        log.info("Routines done: total=%d, embedded=%d, unchanged=%d, removed=%d",
+                 total, embedded, skipped, removed)
 
     # --- Embed metadata objects ---
-    # category + name (CamelCase split) + synonym + comment + top-5 attribute names
+    # Enriched text: Russian category + name + synonym + comment +
+    # top-10 attributes + tabular parts + top-7 incoming references
+    # (per edit_3/edit_4 — search_objects quality fix)
     obj_rows = run_query("""
         MATCH (mo:MetadataObject {project_name: $p})
+        WHERE NOT mo.category_name IN [
+            'ОбщиеКартинки', 'ЭлементыСтиля', 'Стили',
+            'CommonPictures', 'StyleItems', 'Styles'
+        ]
         RETURN mo.name AS name, mo.category_name AS category,
                mo.Synonym AS synonym, mo.Comment AS comment,
                mo.qualified_name AS qn
     """, {"p": PROJECT_NAME})
 
-    # Pre-fetch: attribute names (max 5), USED_IN refs (max 5), enum values (max 5)
+    # Pre-fetch: attributes (max 10), tabular parts, incoming refs (max 7), enum values
     attr_map = {}
     attr_rows = run_query("""
         MATCH (mo:MetadataObject {project_name: $p})-[:HAS_ATTRIBUTE]->(a:Attribute)
@@ -771,18 +831,31 @@ def _build_embeddings():
     """, {"p": PROJECT_NAME})
     for ar in attr_rows:
         lst = attr_map.setdefault(ar["qn"], [])
-        if len(lst) < 5:
+        if len(lst) < 10:
             lst.append(ar["name"])
 
+    tab_map = {}
+    tab_rows = run_query("""
+        MATCH (mo:MetadataObject {project_name: $p})-[:HAS_TABULAR_PART]->(t:TabularPart)
+        RETURN mo.qualified_name AS qn, t.name AS name
+    """, {"p": PROJECT_NAME})
+    for tr in tab_rows:
+        tab_map.setdefault(tr["qn"], []).append(tr["name"])
+
     ref_map = {}
+    seen_ref = {}
     ref_rows = run_query("""
         MATCH (other:MetadataObject)-[:USED_IN]->(mo:MetadataObject {project_name: $p})
         RETURN mo.qualified_name AS qn, other.name AS name
     """, {"p": PROJECT_NAME})
     for rr in ref_rows:
+        seen = seen_ref.setdefault(rr["qn"], set())
+        if rr["name"] in seen:
+            continue
         lst = ref_map.setdefault(rr["qn"], [])
-        if len(lst) < 5:
+        if len(lst) < 7:
             lst.append(rr["name"])
+            seen.add(rr["name"])
 
     enum_map = {}
     enum_rows = run_query("""
@@ -791,66 +864,120 @@ def _build_embeddings():
     """, {"p": PROJECT_NAME})
     for er in enum_rows:
         lst = enum_map.setdefault(er["qn"], [])
-        if len(lst) < 5:
+        if len(lst) < 10:
             lst.append(er["name"])
 
-    if obj_rows:
-        existing_keys = store.get_all_keys("objects")
-        current_keys = set()
-        to_embed_rows = []
-        to_embed_texts = []
+    category_ru = {
+        "Справочники": "Справочник",
+        "Документы": "Документ",
+        "РегистрыСведений": "Регистр сведений",
+        "РегистрыНакопления": "Регистр накопления",
+        "РегистрыБухгалтерии": "Регистр бухгалтерии",
+        "РегистрыРасчета": "Регистр расчёта",
+        "Перечисления": "Перечисление",
+        "Обработки": "Обработка",
+        "Отчеты": "Отчёт",
+        "ОбщиеМодули": "Общий модуль",
+        "БизнесПроцессы": "Бизнес-процесс",
+        "Задачи": "Задача системы",
+        "Константы": "Константа",
+        "ПланыВидовХарактеристик": "План видов характеристик",
+        "ПланыСчетов": "План счетов",
+        "ПланыВидовРасчета": "План видов расчёта",
+        "ПланыОбмена": "План обмена",
+        "ОбщиеКоманды": "Общая команда",
+        "ОбщиеФормы": "Общая форма",
+        "Подсистемы": "Подсистема",
+        "Роли": "Роль",
+    }
 
+    if obj_rows:
+        total_obj = len(obj_rows)
+        existing_obj_hashes = store.get_all_hashes("objects")
+        current_obj_keys = set()
+        pending_items_o: list[tuple[str, dict, str, str]] = []
+        pending_texts_o: list[str] = []
+        embedded_o = 0
+        skipped_o = 0
+
+        def flush_objects():
+            nonlocal embedded_o
+            if not pending_texts_o:
+                return
+            inner = _adaptive_inner_batch(pending_texts_o)
+            vectors = embedder.embed_passages(pending_texts_o, batch_size=inner)
+            store.add_many("objects", pending_items_o, vectors)
+            embedded_o += len(pending_texts_o)
+            log.info("Embedded objects: %d/%d (skipped=%d, chunk=%d, inner_batch=%d)",
+                     embedded_o + skipped_o, total_obj, skipped_o,
+                     len(pending_texts_o), inner)
+            pending_items_o.clear()
+            pending_texts_o.clear()
+
+        log.info("Embedding metadata objects: total=%d, chunk=%d",
+                 total_obj, EMBEDDING_STREAM_CHUNK)
         for o in obj_rows:
             key = o["qn"]
-            current_keys.add(key)
-            parts = []
-            if o.get("category"):
-                parts.append(o["category"])
-            name = o.get("name", "")
+            current_obj_keys.add(key)
+            name = o.get("name", "") or ""
             name_split = _split_camel_case(name)
-            parts.append(name_split)
-            if o.get("synonym"):
-                parts.append(o["synonym"])
-            if o.get("comment"):
-                parts.append(o["comment"])
-            # Top-5 attribute names
+            cat_raw = o.get("category", "") or ""
+            cat = category_ru.get(cat_raw, cat_raw)
+
+            parts = [f"{cat} {name_split}".strip()]
+
+            synonym = o.get("synonym") or ""
+            if synonym and synonym != name:
+                parts.append(f"({synonym})")
+
+            comment = o.get("comment") or ""
+            if comment:
+                parts.append(f"— {comment}")
+
             obj_attrs = attr_map.get(key, [])
             if obj_attrs:
-                parts.append("Реквизиты: " + ", ".join(_split_camel_case(a) for a in obj_attrs))
-            # Enum values (for Перечисления)
+                parts.append("Реквизиты: " + ", ".join(
+                    _split_camel_case(a) for a in obj_attrs))
+
+            obj_tabs = tab_map.get(key, [])
+            if obj_tabs:
+                parts.append("Табличные части: " + ", ".join(
+                    _split_camel_case(t) for t in obj_tabs))
+
             obj_enums = enum_map.get(key, [])
             if obj_enums:
-                parts.append("Значения: " + ", ".join(_split_camel_case(e) for e in obj_enums))
-            # Who uses this object (max 5)
+                parts.append("Значения: " + ", ".join(
+                    _split_camel_case(e) for e in obj_enums))
+
             obj_refs = ref_map.get(key, [])
             if obj_refs:
-                parts.append("Используется в: " + ", ".join(obj_refs))
-            text = " | ".join(parts)
+                parts.append("Используется в: " + ", ".join(
+                    _split_camel_case(r) for r in obj_refs))
+
+            text = ". ".join(parts)
             th = text_hash(text)
 
-            if store.get_hash(key) == th:
+            if existing_obj_hashes.get(key) == th:
+                skipped_o += 1
                 continue
-            to_embed_rows.append((o, th))
-            to_embed_texts.append(text)
+            metadata = {
+                "name": o.get("name", ""),
+                "category": o.get("category", ""),
+                "synonym": o.get("synonym", ""),
+                "comment": o.get("comment", ""),
+            }
+            pending_items_o.append((key, metadata, th, text))
+            pending_texts_o.append(text)
+            if len(pending_items_o) >= EMBEDDING_STREAM_CHUNK:
+                flush_objects()
+        flush_objects()
 
-        for old_key in existing_keys - current_keys:
+        removed_o = 0
+        for old_key in set(existing_obj_hashes) - current_obj_keys:
             store.remove(old_key)
-
-        if to_embed_texts:
-            log.info("Embedding %d metadata objects (%d unchanged, %d removed)...",
-                     len(to_embed_texts), len(obj_rows) - len(to_embed_texts),
-                     len(existing_keys - current_keys))
-            vectors = embedder.embed_passages(to_embed_texts, batch_size=EMBEDDING_BATCH_SIZE)
-            for (o, th), text, vec in zip(to_embed_rows, to_embed_texts, vectors):
-                store.add(o["qn"], "objects", vec, {
-                    "name": o.get("name", ""),
-                    "category": o.get("category", ""),
-                    "synonym": o.get("synonym", ""),
-                    "comment": o.get("comment", ""),
-                }, text_hash=th, search_text=text)
-            log.info("Embedded %d metadata objects", len(to_embed_texts))
-        else:
-            log.info("All %d object embeddings up to date", len(obj_rows))
+            removed_o += 1
+        log.info("Objects done: total=%d, embedded=%d, unchanged=%d, removed=%d",
+                 total_obj, embedded_o, skipped_o, removed_o)
 
     log.info("Embedding complete: %d routines, %d objects in vector store",
              store.count("routines"), store.count("objects"))
@@ -872,13 +999,9 @@ def load_all():
         )
         cnt = result[0]["cnt"] if result else 0
         log.info("[OK] Project metadata already loaded (%d objects)", cnt)
-        # Still initialize embedding service (models + sqlite-vec)
+        # Build embeddings if enabled (models + sqlite-vec + vectors)
         if ENABLE_EMBEDDING:
-            from app.services.embedding import init
-            init(EMBEDDING_MODEL_PATH, EMBEDDING_DB_PATH,
-                 reranker_path=RERANKER_MODEL_PATH,
-                 query_prefix=EMBEDDING_QUERY_PREFIX,
-                 passage_prefix=EMBEDDING_PASSAGE_PREFIX)
+            _build_embeddings()
         return
 
     if FULL_METADATA_RELOAD:

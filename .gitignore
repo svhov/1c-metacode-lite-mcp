@@ -27,7 +27,6 @@ desktop.ini
 
 # Environment / secrets
 .env
-!.env.example
 
 # Data directories (mounted volumes)
 data/
@@ -39,13 +38,14 @@ edit_*.txt
 *.onnx
 lite/mcp-service/models/
 
-# Legacy (non-lite) files
+# Compose files — actual configs are local; only example is committed
 docker-compose.yml
-!lite/docker-compose.yml
 docker-compose.example.yml
+!lite/docker-compose.example.yml
+
+# Legacy / runtime files (not part of the lite stack)
 start-mcp-services.sh
 start-mcp.log
 PLAN-lightweight-mcp.md
 MCP_SERVER_CAPABILITIES.md
-.env.example
 nohup.out

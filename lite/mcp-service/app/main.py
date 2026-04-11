@@ -4,8 +4,57 @@ Entry point: loads data into Memgraph, then starts FastMCP server with SSE trans
 """
 
 import logging
+import os
 import sys
 import threading
+import time
+from contextlib import asynccontextmanager
+
+# Force a short SSE keep-alive ping interval BEFORE fastmcp imports anything
+# from sse_starlette. EventSourceResponse defaults to 15s; we patch it lower
+# so idle SSE connections don't get torn down by intermediate proxies.
+SSE_PING_INTERVAL = int(os.environ.get("SSE_PING_INTERVAL", "10"))
+HEARTBEAT_LOG_INTERVAL = int(os.environ.get("HEARTBEAT_LOG_INTERVAL", "30"))
+
+try:
+    from sse_starlette import sse as _sse_mod
+    _orig_esr_init = _sse_mod.EventSourceResponse.__init__
+
+    def _esr_init_with_ping(self, *args, **kwargs):
+        if kwargs.get("ping") is None:
+            kwargs["ping"] = SSE_PING_INTERVAL
+        _orig_esr_init(self, *args, **kwargs)
+
+    _sse_mod.EventSourceResponse.__init__ = _esr_init_with_ping
+except Exception:
+    pass
+
+# Track active SSE sessions so the heartbeat log line can show how many
+# clients are connected. Patch SseServerTransport.connect_sse with an
+# async-context wrapper that increments/decrements a global counter.
+_active_sse_sessions = 0
+_sse_sessions_lock = threading.Lock()
+try:
+    import mcp.server.sse as _mcp_sse_mod
+    _orig_connect_sse = _mcp_sse_mod.SseServerTransport.connect_sse
+
+    def _wrap_connect_sse(orig):
+        @asynccontextmanager
+        async def wrapped(self, scope, receive, send):
+            global _active_sse_sessions
+            with _sse_sessions_lock:
+                _active_sse_sessions += 1
+            try:
+                async with orig(self, scope, receive, send) as streams:
+                    yield streams
+            finally:
+                with _sse_sessions_lock:
+                    _active_sse_sessions -= 1
+        return wrapped
+
+    _mcp_sse_mod.SseServerTransport.connect_sse = _wrap_connect_sse(_orig_connect_sse)
+except Exception:
+    pass
 
 from fastmcp import FastMCP
 
@@ -109,21 +158,40 @@ if ENABLE_EMBEDDING:
         return handle_search_embedding(query)
 
 
+def _heartbeat_logger():
+    """Periodic stdout heartbeat so users can see the MCP is alive in docker logs.
+
+    Started only AFTER data load (incl. embedding) completes — otherwise the
+    heartbeat lines would be interleaved with progress logs and just add noise.
+    """
+    while True:
+        time.sleep(HEARTBEAT_LOG_INTERVAL)
+        log.info("heartbeat — project=%s active_sse_sessions=%d",
+                 PROJECT_NAME, _active_sse_sessions)
+
+
 def _load_data_background():
-    """Load data in background thread so MCP server starts immediately."""
+    """Load data in background, then start the heartbeat logger."""
     try:
         load_all()
     except Exception:
         log.exception("Data load failed")
+    # Always start heartbeat afterwards — even on failure, users should see
+    # that the MCP server itself is still alive and serving requests.
+    log.info("Data load finished — starting heartbeat (every %ds)",
+             HEARTBEAT_LOG_INTERVAL)
+    threading.Thread(target=_heartbeat_logger, daemon=True).start()
 
 
 if __name__ == "__main__":
     log.info("Starting 1C Metacode MCP Lite — project: %s", PROJECT_NAME)
 
-    # Load data in background
+    # Load data in background (heartbeat starts when load finishes)
     loader_thread = threading.Thread(target=_load_data_background, daemon=True)
     loader_thread.start()
 
     # Start MCP server
-    log.info("Starting MCP server on 0.0.0.0:%d", MCP_PORT)
+    log.info("Starting MCP server on 0.0.0.0:%d (SSE ping=%ds, heartbeat log=%ds, "
+             "heartbeat starts after data load)",
+             MCP_PORT, SSE_PING_INTERVAL, HEARTBEAT_LOG_INTERVAL)
     mcp.run(transport="sse", host="0.0.0.0", port=MCP_PORT)
