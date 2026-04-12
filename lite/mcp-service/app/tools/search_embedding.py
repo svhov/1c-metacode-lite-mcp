@@ -32,6 +32,8 @@ _OBJECT_SIGNAL_WORDS = frozenset({
     "перечисление", "перечисления", "обработка", "обработки", "отчет", "отчёт",
     "отчета", "план", "константа", "хранение", "хранения", "архив", "архива",
     "реестр", "реестра", "журнал", "журнала", "каталог", "каталога",
+    "интеграция", "интеграции", "бизнес-процесс", "процесс", "процесса",
+    "настройки", "настройка", "подсистема", "подсистемы",
 })
 
 # Query expansion: domain-specific synonyms
@@ -103,16 +105,23 @@ def _boost_by_category(results: list[dict], query_text: str) -> list[dict]:
 def _boost_exact_name_match(results: list[dict], query_text: str) -> list[dict]:
     """Boost results where query words closely match the object name.
 
-    Shorter names with high query overlap get stronger boost.
-    "Контрагенты" (13 chars, 1 CamelCase word) beats
-    "ГруппыДоступаКонтрагентов" (25 chars, 3 CamelCase words) for
-    query "справочник контрагентов".
+    Uses precision (matched/name_words) × coverage (matched/query_words)
+    to rank exact matches. Higher combined score = more relevant.
+    Also gives category bonus when query hints at specific category.
     """
     if not results:
         return results
     q_words = [w.lower() for w in query_text.split() if len(w) >= 4]
     if not q_words:
         return results
+
+    # Detect category hint from query
+    query_lower = " ".join(q_words)
+    target_cat = None
+    for hint, cat in _CATEGORY_HINTS.items():
+        if hint in query_lower:
+            target_cat = cat
+            break
 
     for r in results:
         name = r.get("name", "") or ""
@@ -121,22 +130,24 @@ def _boost_exact_name_match(results: list[dict], query_text: str) -> list[dict]:
         if matches == 0:
             continue
 
-        # CamelCase word count in name (upper chars = word boundaries)
         name_words = max(1, sum(1 for c in name if c.isupper()))
-        coverage = matches / max(len(q_words), 1)
+        precision = matches / name_words   # how much of name is covered
+        coverage = matches / len(q_words)  # how much of query is in name
 
-        # Precision: what fraction of name words are matched by query?
-        # "Контрагенты" (1 word, 1 match) = precision 1.0
-        # "ГруппыДоступаКонтрагентов" (3 words, 1 match) = precision 0.33
-        precision = matches / name_words
+        # Combined relevance: precision × (1 + coverage)
+        # "ВерсииФайлов" (precision=1.0, coverage=0.4) >
+        # "ОбращенияКВерсиямФайлов" (precision=0.67, coverage=0.4)
+        relevance = precision * (1 + coverage)
 
-        if precision >= 0.8 and coverage >= 0.3:
-            # Near-exact match (name ≈ query) — strongest boost
-            r["score"] = round(r.get("score", 0) * 3.0, 4)
-        elif precision >= 0.5 and coverage >= 0.3:
-            r["score"] = round(r.get("score", 0) * 1.5, 4)
-        elif coverage >= 0.3:
-            r["score"] = round(r.get("score", 0) * 1.2, 4)
+        # Category bonus: if query says "справочник" and this is Справочники
+        cat_bonus = 1.3 if (target_cat and r.get("category") == target_cat) else 1.0
+
+        if relevance >= 1.2:
+            r["score"] = round(r.get("score", 0) * 3.0 * cat_bonus, 4)
+        elif relevance >= 0.8:
+            r["score"] = round(r.get("score", 0) * 2.0 * cat_bonus, 4)
+        elif relevance >= 0.5:
+            r["score"] = round(r.get("score", 0) * 1.3 * cat_bonus, 4)
 
     results.sort(key=lambda x: x.get("score", 0), reverse=True)
     return results

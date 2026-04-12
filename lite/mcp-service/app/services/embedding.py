@@ -585,19 +585,25 @@ class SqliteVecStore:
         q_words_lower = [w.strip().lower() for w in query_text.split()
                          if len(w.strip()) >= 4 and w.strip().lower() not in self._STOP_WORDS]
         if q_words_lower and collection == "objects":
-            all_names = self._conn.execute(
-                "SELECT key, name FROM vec_items WHERE collection = ?",
+            all_items = self._conn.execute(
+                "SELECT key, name, synonym FROM vec_items WHERE collection = ?",
                 (collection,)
             ).fetchall()
-            for key, name in all_names:
+            for key, name, synonym in all_items:
                 name_lower = name.lower()
-                nm = sum(1 for w in q_words_lower if w[:5] in name_lower)
+                syn_lower = (synonym or "").lower()
+                # Match against both name and synonym
+                nm_name = sum(1 for w in q_words_lower if w[:5] in name_lower)
+                nm_syn = sum(1 for w in q_words_lower if w[:5] in syn_lower)
+                nm = max(nm_name, nm_syn)
                 if nm == 0:
                     continue
                 name_word_count = max(1, sum(1 for c in name if c.isupper()))
                 precision = nm / name_word_count
-                if precision >= 0.5:
-                    name_scores[key] = precision
+                coverage = nm / len(q_words_lower)
+                relevance = precision * (1 + coverage)
+                if relevance >= 0.6:
+                    name_scores[key] = relevance
 
         # 3. Combine scores with adaptive weights
         # If embedding found strong hits, trust it more; otherwise lean on BM25

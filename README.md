@@ -98,24 +98,24 @@ $EDITOR docker-compose.yml
 # Запустить
 docker compose build
 docker compose up -d memgraph
-docker compose up -d 1c-metacode-do_main
+docker compose up -d litecode-my_project
 
 # Подключить к Claude Code
-claude mcp add do_main --transport sse http://localhost:6004/sse
+claude mcp add my_project --transport sse http://localhost:6004/sse
 ```
 
 Через 30 секунд после запуска MCP-сервер **уже отвечает на запросы**, пока в фоне грузятся данные. Через несколько минут доступен полнотекстовый и семантический поиск.
 
 ```text
-> /mcp do_main browse Контрагент
+> /mcp my_project browse Контрагент
 {
   "found": [
-    {"name": "Контрагенты", "category": "Справочники", "qn": "do_main/Конфигурация/Справочники/Контрагенты"},
+    {"name": "Контрагенты", "category": "Справочники", "qn": "my_project/Конфигурация/Справочники/Контрагенты"},
     {"name": "КонтрагентыКонтактныеЛица", ...}
   ]
 }
 
-> /mcp do_main search_by_embedding "справочник для хранения банковских счетов"
+> /mcp my_project search_by_embedding "справочник для хранения банковских счетов"
 {
   "results": [
     {"name": "БанковскиеСчета", "category": "Справочники", "score": 0.91},
@@ -132,7 +132,7 @@ claude mcp add do_main --transport sse http://localhost:6004/sse
 
 ### 2026-04-12 — Enriched embedding search v2
 
-Полная переработка семантического поиска. Precision@1 поднят с 43% до **80%** (DO_AME) и **65%** (DO_MAIN 92K рутин). P@3 = **90%** на большой конфигурации.
+Полная переработка семантического поиска. Precision@1 поднят с 43% до **75%** на конфигурации 92K рутин. P@3 = **95%**, P@5 = **100%**.
 
 **Обогащение текста объектов (15 полей):**
 
@@ -249,7 +249,7 @@ python lite/bench_metrics.py --json          # машиночитаемый фо
                         |
           +-------------+-------------+
           |                           |
-     do_main :6004              erp_main :6001
+     project_A :6001            project_B :6002
      (Python FastMCP, SSE)      (Python FastMCP, SSE)
           |                           |
    +------+------+            +------+------+
@@ -307,14 +307,14 @@ cp docker-compose.example.yml docker-compose.yml
 
 ```yaml
 volumes:
-  - /path/to/data/do_main:/app/data
+  - /path/to/data/my_project:/app/data
 ```
 
 И уникальное имя проекта:
 
 ```yaml
 environment:
-  - PROJECT_NAME=do_main
+  - PROJECT_NAME=my_project
 ```
 
 ### 3. Запуск
@@ -322,7 +322,7 @@ environment:
 ```bash
 docker compose build
 docker compose up -d memgraph
-docker compose up -d 1c-metacode-do_main
+docker compose up -d litecode-my_project
 ```
 
 MCP-сервер **сразу** принимает запросы. Данные и embeddings грузятся в фоне — прогресс виден в `docker logs`.
@@ -332,10 +332,10 @@ MCP-сервер **сразу** принимает запросы. Данные 
 **Claude Code:**
 
 ```bash
-claude mcp add do_main --transport sse http://localhost:6004/sse
+claude mcp add my_project --transport sse http://localhost:6001/sse
 ```
 
-**Cursor / Windsurf / Cline:** SSE-эндпоинт `http://localhost:6004/sse`.
+**Cursor / Windsurf / Cline:** SSE-эндпоинт `http://localhost:6001/sse`.
 
 ---
 
