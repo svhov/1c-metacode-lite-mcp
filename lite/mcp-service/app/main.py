@@ -91,7 +91,7 @@ Structural operations (14):
 - get_call_graph: callers, callees, call tree. Params: name or id, direction (callers|callees|tree), from/to (cross-owner)
 - get_predefined: predefined items. Params: name, item, is_folder
 - get_access: role access rights. Params: role, target
-- get_references: USED_IN and DO_MOVEMENTS_IN edges. Params: name, direction (incoming|outgoing|movements)
+- get_references: USED_IN and MOVEMENTS_IN edges. Params: name, direction (incoming|outgoing|movements)
 - get_subscriptions: event subscriptions. Params: name
 - get_http_service: HTTP services, URL templates, methods. Params: name, template
 - resolve: resolve by qualified_name, GUID, prefix. Params: qn, guid, prefix

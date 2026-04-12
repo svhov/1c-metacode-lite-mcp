@@ -245,6 +245,9 @@ def parse_metadata_report(filepath: str) -> ParsedConfig:
                     current_child["properties"]["Тип"] = type_val
                 elif depth == 3 and current_object and not current_child:
                     current_object["properties"]["Тип"] = type_val
+            # Store "Состав:" collection for subsystems (list of member objects)
+            elif coll_key == "Состав" and coll_values and current_object:
+                current_object["properties"]["Состав"] = coll_values
             continue
 
         # Quoted collection values (e.g., '"Роль.АМЕ_ОсновнаяРоль"')

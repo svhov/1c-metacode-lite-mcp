@@ -25,6 +25,10 @@ log = logging.getLogger(__name__)
 
 CHUNK_SIZE = 500
 
+# Module-level subsystem membership map: object_name -> [subsystem_display_name]
+# Built from "Состав" property of subsystem objects in the metadata report.
+_subsystem_map: dict[str, list[str]] = {}
+
 
 def _chunk(lst, size):
     for i in range(0, len(lst), size):
@@ -149,6 +153,47 @@ def _load_metadata(config):
 
     # Load child nodes (attributes, resources, dimensions, etc.)
     _load_children(config)
+
+    # Build subsystem membership map from "Состав" property
+    _build_subsystem_map(config)
+
+
+def _build_subsystem_map(config):
+    """Build object_name -> [subsystem_name] map from subsystem Состав property.
+
+    The metadata report stores subsystem composition as:
+        Подсистемы.УправлениеЗакупками
+            Состав:
+                "Документы.ЗаказПоставщику"
+                "Справочники.Контрагенты"
+    """
+    global _subsystem_map
+    _subsystem_map = {}
+    total = 0
+
+    for obj in config.objects:
+        if obj["category"] != "Подсистемы":
+            continue
+        members = obj["properties"].get("Состав", [])
+        if not isinstance(members, list) or not members:
+            continue
+
+        # Use synonym as display name, fallback to name
+        subsystem_label = obj["properties"].get("Синоним", "") or obj["name"]
+
+        for member in members:
+            # member format: "Документы.ЗаказПоставщику" or "Справочники.Контрагенты"
+            parts = member.split(".")
+            if len(parts) >= 2:
+                obj_name = parts[1]
+                lst = _subsystem_map.setdefault(obj_name, [])
+                if subsystem_label not in lst:
+                    lst.append(subsystem_label)
+                    total += 1
+
+    if total:
+        log.info("Built subsystem map: %d object-subsystem links from %d subsystems",
+                 total, sum(1 for o in config.objects if o["category"] == "Подсистемы"))
 
 
 import re as _re
@@ -629,7 +674,7 @@ _RE_MOVEMENT = _re.compile(
 
 
 def _build_movements(routines: list[dict]):
-    """Build DO_MOVEMENTS_IN edges from Document -> Register patterns in BSL code."""
+    """Build MOVEMENTS_IN edges from Document -> Register patterns in BSL code."""
     pairs = set()
     for r in routines:
         owner_parts = r["owner_qn"].split("/")
@@ -646,10 +691,10 @@ def _build_movements(routines: list[dict]):
             pairs.add((owner_obj_qn, register_name))
 
     if not pairs:
-        log.info("No DO_MOVEMENTS_IN references found in BSL code")
+        log.info("No MOVEMENTS_IN references found in BSL code")
         return
 
-    log.info("Building %d DO_MOVEMENTS_IN edges...", len(pairs))
+    log.info("Building %d MOVEMENTS_IN edges...", len(pairs))
     pair_list = [{"doc_qn": p[0], "reg_name": p[1]} for p in pairs]
 
     for chunk in _chunk(pair_list, CHUNK_SIZE):
@@ -661,10 +706,10 @@ def _build_movements(routines: list[dict]):
               AND reg.category_name IN [
                   'РегистрыСведений', 'РегистрыНакопления',
                   'РегистрыБухгалтерии', 'РегистрыРасчета']
-            MERGE (doc)-[:DO_MOVEMENTS_IN]->(reg)
+            MERGE (doc)-[:MOVEMENTS_IN]->(reg)
         """, {"pairs": chunk, "project": PROJECT_NAME})
 
-    log.info("DO_MOVEMENTS_IN edges created")
+    log.info("MOVEMENTS_IN edges created")
 
 
 def _split_camel_case(name: str) -> str:
@@ -684,29 +729,117 @@ def _split_camel_case(name: str) -> str:
     return "".join(result)
 
 
+_MODULE_TYPE_RU = {
+    "ObjectModule": "МодульОбъекта",
+    "ManagerModule": "МодульМенеджера",
+    "CommonModule": "ОбщийМодуль",
+    "FormModule": "МодульФормы",
+    "Module": "Модуль",
+}
+
+# Event handler name patterns for automatic event_name detection
+_EVENT_NAMES = {
+    "ПередЗаписью": "ПередЗаписью",
+    "ПриЗаписи": "ПриЗаписи",
+    "ПослеЗаписи": "ПослеЗаписи",
+    "ПередУдалением": "ПередУдалением",
+    "ОбработкаПроведения": "ОбработкаПроведения",
+    "ОбработкаУдаленияПроведения": "ОбработкаУдаленияПроведения",
+    "ПередПроведением": "ПередПроведением",
+    "ПриКопировании": "ПриКопировании",
+    "ПриСозданииНаСервере": "ПриСозданииНаСервере",
+    "ПриОткрытии": "ПриОткрытии",
+    "ПриЗакрытии": "ПриЗакрытии",
+    "ПриИзменении": "ПриИзменении",
+    "ОбработкаЗаполнения": "ОбработкаЗаполнения",
+    "ОбработкаПолученияФормы": "ОбработкаПолученияФормы",
+    "ПриЧтенииНаСервере": "ПриЧтенииНаСервере",
+    "ПриПолученииДанныхНаСервере": "ПриПолученииДанныхНаСервере",
+    "BeforeWrite": "BeforeWrite",
+    "OnWrite": "OnWrite",
+    "AfterWrite": "AfterWrite",
+    "Posting": "Posting",
+    "UndoPosting": "UndoPosting",
+    "Filling": "Filling",
+    "OnCreateAtServer": "OnCreateAtServer",
+    "OnOpen": "OnOpen",
+    "OnReadAtServer": "OnReadAtServer",
+}
+
+
+def _detect_event_name(routine_name: str) -> str:
+    """Detect if routine is an event handler by name pattern."""
+    for pattern, event in _EVENT_NAMES.items():
+        if routine_name == pattern or routine_name.endswith(pattern):
+            return event
+    return ""
+
+
 def _build_routine_text(r) -> str:
-    """Compose embedding text for a routine row."""
-    parts = [_split_camel_case(r.get("name", ""))]
+    """Compose enriched embedding text for a routine row.
+
+    Format follows update_1.txt spec: owner context, signature, directive,
+    region, description, param types, return type, event name, called objects.
+    """
+    parts = []
+    owner_qn = r.get("owner_qn", "")
+    owner = owner_qn.split("/")
+
+    # 1. Owner context: category + object name
+    if len(owner) >= 4:
+        owner_cat = owner[2]
+        owner_name = _split_camel_case(owner[3])
+        parts.append(f"Модуль: {owner_cat}.{owner_name}")
+
+    # 2. Module type
+    module_type = r.get("module_type", "")
+    if module_type:
+        mt_ru = _MODULE_TYPE_RU.get(module_type, module_type)
+        parts.append(f"Тип модуля: {mt_ru}")
+
+    # 3. Signature line
+    rtype = r.get("routine_type", "Procedure")
+    prefix = "Функция" if rtype == "Function" else "Процедура"
+    name = r.get("name", "")
+    params = r.get("params_text", "")
+    export_flag = " Экспорт" if r.get("export") else ""
+    parts.append(f"{prefix} {name}({params}){export_flag}")
+
+    # 4. Directive
+    directive = r.get("directive", "")
+    if directive:
+        parts.append(f"Контекст: {directive}")
+
+    # 5. Region / area_path
+    area = r.get("area_path", "")
+    if area:
+        parts.append(f"Область: {area}")
+
+    # 6. Description
     if r.get("doc_description"):
-        parts.append(r["doc_description"])
-    else:
-        owner_qn = r.get("owner_qn", "")
-        owner = owner_qn.split("/")
-        rtype = r.get("routine_type", "Procedure")
-        if len(owner) >= 4:
-            auto = (f"{rtype} {_split_camel_case(r.get('name', ''))}. "
-                    f"Модуль: {_split_camel_case(owner[3])}")
-            params = r.get("params_text", "")
-            if params:
-                auto += f". Параметры: {params}"
-            parts.append(auto)
-    if r.get("signature"):
-        parts.append(r["signature"])
-    if r.get("owner_qn"):
-        owner = r["owner_qn"].split("/")
-        if len(owner) >= 4:
-            parts.append(f"{owner[2]} {owner[3]}")
-    return " | ".join(parts)
+        parts.append(f"Описание: {r['doc_description']}")
+
+    # 7. Event handler detection
+    event = _detect_event_name(name)
+    if event:
+        parts.append(f"Событие: {event}")
+
+    # 8. Parameter types (from documentation)
+    doc_params = r.get("doc_params_text", "")
+    if doc_params:
+        parts.append(f"Параметры: {doc_params}")
+
+    # 9. Return type (from documentation)
+    doc_return = r.get("doc_return_text", "")
+    if doc_return:
+        parts.append(f"Возвращает: {doc_return}")
+
+    # 10. Called objects (top 5, from pre-fetched map)
+    called = r.get("_called_objects", [])
+    if called:
+        parts.append("Работает с: " + ", ".join(called[:5]))
+
+    return "\n".join(parts)
 
 
 def _adaptive_inner_batch(texts: list[str]) -> int:
@@ -742,15 +875,47 @@ def _build_embeddings():
         log.warning("Embedding service not available, skipping")
         return
 
+    # Ensure subsystem map is populated (may be empty if metadata was already loaded)
+    if not _subsystem_map:
+        metadata_files = [
+            f for f in os.listdir(METADATA_DIR)
+            if f.endswith(".txt")
+        ] if os.path.isdir(METADATA_DIR) else []
+        if metadata_files:
+            config = parse_metadata_report(os.path.join(METADATA_DIR, metadata_files[0]))
+            _build_subsystem_map(config)
+            log.info("Subsystem map rebuilt for embedding: %d entries",
+                     sum(len(v) for v in _subsystem_map.values()))
+
     # --- Embed routines (streaming) ---
     rows = run_query("""
         MATCH (r:Routine {project_name: $p})
+        OPTIONAL MATCH (m:Module)-[:DECLARES]->(r)
         RETURN r.id AS id, r.name AS name, r.signature AS signature,
                r.doc_description AS doc_description,
                r.params_text AS params_text,
                r.owner_qn AS owner_qn, r.export AS export,
-               r.routine_type AS routine_type
+               r.routine_type AS routine_type,
+               r.directive AS directive,
+               r.area_path AS area_path,
+               r.doc_params_text AS doc_params_text,
+               r.doc_return_text AS doc_return_text,
+               m.module_type AS module_type
     """, {"p": PROJECT_NAME})
+
+    # Pre-fetch called objects per routine (top 5 unique object names from CALLS targets)
+    call_obj_map = {}
+    call_rows = run_query("""
+        MATCH (r:Routine {project_name: $p})-[:CALLS]->(target:Routine)
+        RETURN r.id AS rid, target.owner_qn AS target_owner
+    """, {"p": PROJECT_NAME})
+    for cr in call_rows:
+        t_parts = (cr.get("target_owner") or "").split("/")
+        if len(t_parts) >= 4:
+            obj_label = f"{t_parts[2]}.{t_parts[3]}"
+            lst = call_obj_map.setdefault(cr["rid"], [])
+            if obj_label not in lst and len(lst) < 5:
+                lst.append(obj_label)
 
     if rows:
         total = len(rows)
@@ -781,6 +946,7 @@ def _build_embeddings():
             seen += 1
             key = r["id"]
             current_keys.add(key)
+            r["_called_objects"] = call_obj_map.get(key, [])
             text = _build_routine_text(r)
             th = text_hash(text)
             if existing_hashes.get(key) == th:
@@ -823,50 +989,6 @@ def _build_embeddings():
                mo.qualified_name AS qn
     """, {"p": PROJECT_NAME})
 
-    # Pre-fetch: attributes (max 10), tabular parts, incoming refs (max 7), enum values
-    attr_map = {}
-    attr_rows = run_query("""
-        MATCH (mo:MetadataObject {project_name: $p})-[:HAS_ATTRIBUTE]->(a:Attribute)
-        RETURN mo.qualified_name AS qn, a.name AS name
-    """, {"p": PROJECT_NAME})
-    for ar in attr_rows:
-        lst = attr_map.setdefault(ar["qn"], [])
-        if len(lst) < 10:
-            lst.append(ar["name"])
-
-    tab_map = {}
-    tab_rows = run_query("""
-        MATCH (mo:MetadataObject {project_name: $p})-[:HAS_TABULAR_PART]->(t:TabularPart)
-        RETURN mo.qualified_name AS qn, t.name AS name
-    """, {"p": PROJECT_NAME})
-    for tr in tab_rows:
-        tab_map.setdefault(tr["qn"], []).append(tr["name"])
-
-    ref_map = {}
-    seen_ref = {}
-    ref_rows = run_query("""
-        MATCH (other:MetadataObject)-[:USED_IN]->(mo:MetadataObject {project_name: $p})
-        RETURN mo.qualified_name AS qn, other.name AS name
-    """, {"p": PROJECT_NAME})
-    for rr in ref_rows:
-        seen = seen_ref.setdefault(rr["qn"], set())
-        if rr["name"] in seen:
-            continue
-        lst = ref_map.setdefault(rr["qn"], [])
-        if len(lst) < 7:
-            lst.append(rr["name"])
-            seen.add(rr["name"])
-
-    enum_map = {}
-    enum_rows = run_query("""
-        MATCH (mo:MetadataObject {project_name: $p})-[:HAS_ENUM_VALUE]->(ev:EnumValue)
-        RETURN mo.qualified_name AS qn, ev.name AS name
-    """, {"p": PROJECT_NAME})
-    for er in enum_rows:
-        lst = enum_map.setdefault(er["qn"], [])
-        if len(lst) < 10:
-            lst.append(er["name"])
-
     category_ru = {
         "Справочники": "Справочник",
         "Документы": "Документ",
@@ -890,6 +1012,232 @@ def _build_embeddings():
         "Подсистемы": "Подсистема",
         "Роли": "Роль",
     }
+
+    # Pre-fetch: attributes (max 15), tabular parts, dimensions, resources,
+    # incoming refs (max 7), outgoing refs (max 10), enum values (max 10),
+    # forms, register recorders (MOVEMENTS_IN)
+    attr_map = {}
+    attr_rows = run_query("""
+        MATCH (mo:MetadataObject {project_name: $p})-[:HAS_ATTRIBUTE]->(a:Attribute)
+        RETURN mo.qualified_name AS qn, a.name AS name, a.Synonym AS synonym
+    """, {"p": PROJECT_NAME})
+    for ar in attr_rows:
+        lst = attr_map.setdefault(ar["qn"], [])
+        if len(lst) < 15:
+            lst.append(ar.get("synonym") or ar["name"])
+
+    tab_map = {}
+    tab_rows = run_query("""
+        MATCH (mo:MetadataObject {project_name: $p})-[:HAS_TABULAR_PART]->(t:TabularPart)
+        RETURN mo.qualified_name AS qn, t.name AS name, t.Synonym AS synonym
+    """, {"p": PROJECT_NAME})
+    for tr in tab_rows:
+        tab_map.setdefault(tr["qn"], []).append(tr.get("synonym") or tr["name"])
+
+    dim_map = {}
+    dim_rows = run_query("""
+        MATCH (mo:MetadataObject {project_name: $p})-[:HAS_DIMENSION]->(d:Dimension)
+        RETURN mo.qualified_name AS qn, d.name AS name, d.Synonym AS synonym
+    """, {"p": PROJECT_NAME})
+    for dr in dim_rows:
+        dim_map.setdefault(dr["qn"], []).append(dr.get("synonym") or dr["name"])
+
+    res_map = {}
+    res_rows = run_query("""
+        MATCH (mo:MetadataObject {project_name: $p})-[:HAS_RESOURCE]->(r:Resource)
+        RETURN mo.qualified_name AS qn, r.name AS name, r.Synonym AS synonym
+    """, {"p": PROJECT_NAME})
+    for rr in res_rows:
+        res_map.setdefault(rr["qn"], []).append(rr.get("synonym") or rr["name"])
+
+    # Incoming refs (who references this object)
+    ref_map = {}
+    seen_ref = {}
+    ref_rows = run_query("""
+        MATCH (other:MetadataObject)-[:USED_IN]->(mo:MetadataObject {project_name: $p})
+        RETURN mo.qualified_name AS qn, other.name AS name
+    """, {"p": PROJECT_NAME})
+    for rr in ref_rows:
+        seen = seen_ref.setdefault(rr["qn"], set())
+        if rr["name"] in seen:
+            continue
+        lst = ref_map.setdefault(rr["qn"], [])
+        if len(lst) < 7:
+            lst.append(rr["name"])
+            seen.add(rr["name"])
+
+    # Outgoing refs (what this object references)
+    out_ref_map = {}
+    seen_out_ref = {}
+    out_ref_rows = run_query("""
+        MATCH (mo:MetadataObject {project_name: $p})-[:USED_IN]->(target:MetadataObject)
+        RETURN mo.qualified_name AS qn, target.name AS name,
+               target.category_name AS cat
+    """, {"p": PROJECT_NAME})
+    for orr in out_ref_rows:
+        seen = seen_out_ref.setdefault(orr["qn"], set())
+        if orr["name"] in seen:
+            continue
+        lst = out_ref_map.setdefault(orr["qn"], [])
+        if len(lst) < 10:
+            cat_short = category_ru.get(orr.get("cat", ""), "")
+            label = f"{cat_short}.{orr['name']}" if cat_short else orr["name"]
+            lst.append(label)
+            seen.add(orr["name"])
+
+    enum_map = {}
+    enum_rows = run_query("""
+        MATCH (mo:MetadataObject {project_name: $p})-[:HAS_ENUM_VALUE]->(ev:EnumValue)
+        RETURN mo.qualified_name AS qn, ev.name AS name, ev.Synonym AS synonym
+    """, {"p": PROJECT_NAME})
+    for er in enum_rows:
+        lst = enum_map.setdefault(er["qn"], [])
+        if len(lst) < 10:
+            lst.append(er.get("synonym") or er["name"])
+
+    # Forms
+    form_map = {}
+    form_rows = run_query("""
+        MATCH (mo:MetadataObject {project_name: $p})-[:HAS_FORM]->(f:Form)
+        RETURN mo.qualified_name AS qn, f.name AS name
+    """, {"p": PROJECT_NAME})
+    for fr in form_rows:
+        form_map.setdefault(fr["qn"], []).append(fr["name"])
+
+    # Register recorders (documents that make movements into this register)
+    recorder_map = {}
+    recorder_rows = run_query("""
+        MATCH (doc:MetadataObject)-[:MOVEMENTS_IN]->(reg:MetadataObject {project_name: $p})
+        RETURN reg.qualified_name AS qn, doc.name AS name
+    """, {"p": PROJECT_NAME})
+    for rcr in recorder_rows:
+        recorder_map.setdefault(rcr["qn"], []).append(rcr["name"])
+
+    # Top export routines per object (top 10 export procedures/functions)
+    routine_map = {}
+    routine_rows = run_query("""
+        MATCH (mo:MetadataObject {project_name: $p})-[:HAS_MODULE]->(m:Module)-[:DECLARES]->(r:Routine)
+        WHERE r.export = true
+        RETURN mo.qualified_name AS qn, r.name AS name
+    """, {"p": PROJECT_NAME})
+    for rtr in routine_rows:
+        lst = routine_map.setdefault(rtr["qn"], [])
+        if len(lst) < 10:
+            lst.append(rtr["name"])
+
+    # Cross-enrichment: collect keywords from ALL routines that mention each object
+    # in their doc_description (not just routines owned by that object)
+    routine_desc_map = {}  # obj_name -> set of keywords
+    all_routines_with_desc = run_query("""
+        MATCH (r:Routine {project_name: $p})
+        WHERE r.doc_description IS NOT NULL AND size(r.doc_description) > 15
+        RETURN r.doc_description AS doc_desc
+    """, {"p": PROJECT_NAME})
+    # Build object name -> keywords from routines that mention it
+    obj_name_set = {o.get("name", "") for o in obj_rows}
+    for rd in all_routines_with_desc:
+        desc = rd.get("doc_desc") or ""
+        for obj_name in obj_name_set:
+            if obj_name and len(obj_name) >= 5 and obj_name in desc:
+                words = [w.strip().lower() for w in desc.split()
+                         if len(w.strip()) >= 5 and w.strip().lower() != obj_name.lower()]
+                kw_set = routine_desc_map.setdefault(obj_name, set())
+                for w in words[:8]:
+                    kw_set.add(w)
+    if routine_desc_map:
+        log.info("Cross-enrichment: %d objects enriched from routine descriptions",
+                 len(routine_desc_map))
+
+    # Purpose tag patterns: (category, name_regex) -> description
+    import re as _re_purpose
+    PURPOSE_PATTERNS = [
+        ("РегистрыСведений", _re_purpose.compile(r"Цен", _re_purpose.IGNORECASE),
+         "хранение цен и тарифов"),
+        ("РегистрыСведений", _re_purpose.compile(r"Остат|Запас", _re_purpose.IGNORECASE),
+         "учет остатков и запасов"),
+        ("РегистрыСведений", _re_purpose.compile(r"Настро|Параметр", _re_purpose.IGNORECASE),
+         "хранение настроек и параметров"),
+        ("РегистрыСведений", _re_purpose.compile(r"Курс|Валют", _re_purpose.IGNORECASE),
+         "хранение курсов валют"),
+        ("РегистрыСведений", _re_purpose.compile(r"Штрих|Баркод|Barcode", _re_purpose.IGNORECASE),
+         "хранение штрихкодов"),
+        ("РегистрыСведений", _re_purpose.compile(r"Адрес", _re_purpose.IGNORECASE),
+         "хранение адресов"),
+        ("РегистрыНакопления", _re_purpose.compile(r"Товар.*Склад|Запас|Остат", _re_purpose.IGNORECASE),
+         "складской учет товаров"),
+        ("РегистрыНакопления", _re_purpose.compile(r"Взаиморасчет|Задолж|Расчет.*Контрагент", _re_purpose.IGNORECASE),
+         "учет взаиморасчетов"),
+        ("РегистрыНакопления", _re_purpose.compile(r"Продаж|Выручк", _re_purpose.IGNORECASE),
+         "учет продаж и выручки"),
+        ("РегистрыНакопления", _re_purpose.compile(r"Закупк|Поступлен", _re_purpose.IGNORECASE),
+         "учет закупок"),
+        ("Документы", _re_purpose.compile(r"Заказ.*Клиент|Заказ.*Покупат", _re_purpose.IGNORECASE),
+         "оформление заказа от покупателя"),
+        ("Документы", _re_purpose.compile(r"Заказ.*Поставщик", _re_purpose.IGNORECASE),
+         "оформление заказа поставщику"),
+        ("Документы", _re_purpose.compile(r"Реализац", _re_purpose.IGNORECASE),
+         "оформление продажи покупателю"),
+        ("Документы", _re_purpose.compile(r"Поступлен", _re_purpose.IGNORECASE),
+         "оформление закупки у поставщика"),
+        ("Документы", _re_purpose.compile(r"Оплат|Платеж|ПлатежноеПоручение", _re_purpose.IGNORECASE),
+         "оформление оплаты"),
+        ("Документы", _re_purpose.compile(r"Перемещен", _re_purpose.IGNORECASE),
+         "перемещение товаров между складами"),
+        ("Документы", _re_purpose.compile(r"Списан", _re_purpose.IGNORECASE),
+         "списание товаров"),
+        ("Документы", _re_purpose.compile(r"Инвентар", _re_purpose.IGNORECASE),
+         "инвентаризация"),
+        ("Документы", _re_purpose.compile(r"Счет.*Факт|СчетФакт", _re_purpose.IGNORECASE),
+         "счет-фактура"),
+        ("Документы", _re_purpose.compile(r"Авансовый.*Отчет|АвансовыйОтчет", _re_purpose.IGNORECASE),
+         "авансовый отчет"),
+        ("Справочники", _re_purpose.compile(r"Контрагент|Партнер", _re_purpose.IGNORECASE),
+         "справочник юридических и физических лиц"),
+        ("Справочники", _re_purpose.compile(r"Номенклатур", _re_purpose.IGNORECASE),
+         "справочник товаров и услуг"),
+        ("Справочники", _re_purpose.compile(r"Организац", _re_purpose.IGNORECASE),
+         "справочник собственных организаций"),
+        ("Справочники", _re_purpose.compile(r"Склад", _re_purpose.IGNORECASE),
+         "справочник складов"),
+        ("Справочники", _re_purpose.compile(r"Сотрудник|ФизическоеЛицо", _re_purpose.IGNORECASE),
+         "справочник сотрудников"),
+        ("Справочники", _re_purpose.compile(r"Договор", _re_purpose.IGNORECASE),
+         "справочник договоров"),
+        ("Справочники", _re_purpose.compile(r"Валют", _re_purpose.IGNORECASE),
+         "справочник валют"),
+        ("Справочники", _re_purpose.compile(r"ЕдиницыИзмерения|Единица", _re_purpose.IGNORECASE),
+         "справочник единиц измерения"),
+    ]
+
+    _CATEGORY_FALLBACK_RU = {
+        "Документы": "документ для",
+        "Справочники": "справочник",
+        "РегистрыСведений": "хранение данных о",
+        "РегистрыНакопления": "учет",
+        "РегистрыБухгалтерии": "бухгалтерский учет",
+        "РегистрыРасчета": "расчёт",
+        "Обработки": "инструмент для",
+        "Отчеты": "отчет по",
+        "Перечисления": "виды и типы",
+        "БизнесПроцессы": "бизнес-процесс",
+        "Задачи": "задача",
+        "Константы": "настройка",
+        "ПланыВидовХарактеристик": "план видов характеристик",
+        "ПланыСчетов": "план счетов",
+        "ПланыВидовРасчета": "план видов расчёта",
+        "ПланыОбмена": "обмен данными",
+    }
+
+    def _infer_purpose_tag(obj_name: str, cat_raw: str, synonym: str) -> str:
+        """Infer purpose tag from category + name pattern, or fallback."""
+        for pat_cat, pat_re, tag in PURPOSE_PATTERNS:
+            if cat_raw == pat_cat and pat_re.search(obj_name):
+                return tag
+        # Fallback: category prefix + synonym
+        prefix = _CATEGORY_FALLBACK_RU.get(cat_raw, "")
+        if prefix and synonym:
+            return f"{prefix} {synonym.lower()}"
+        return ""
 
     if obj_rows:
         total_obj = len(obj_rows)
@@ -923,38 +1271,100 @@ def _build_embeddings():
             name_split = _split_camel_case(name)
             cat_raw = o.get("category", "") or ""
             cat = category_ru.get(cat_raw, cat_raw)
-
-            parts = [f"{cat} {name_split}".strip()]
-
             synonym = o.get("synonym") or ""
-            if synonym and synonym != name:
-                parts.append(f"({synonym})")
-
             comment = o.get("comment") or ""
-            if comment:
-                parts.append(f"— {comment}")
 
+            # 1. Classification — FIRST, sets context
+            parts = [f"Тип: {cat}"]
+
+            # 2. Name and synonym
+            parts.append(f"Имя: {name_split}")
+            if synonym and synonym != name and synonym != _split_camel_case(name):
+                parts.append(f"Синоним: {synonym}")
+
+            # 3. Description
+            if comment:
+                parts.append(f"Описание: {comment}")
+
+            # 4. Purpose tag (auto-inferred or from patterns)
+            purpose = _infer_purpose_tag(name, cat_raw, synonym)
+            if purpose:
+                parts.append(f"Назначение: {purpose}")
+
+            # 4b. Subsystem (from Состав property of subsystem objects)
+            obj_subsystems = _subsystem_map.get(name, [])
+            if obj_subsystems:
+                parts.append("Подсистема: " + ", ".join(obj_subsystems))
+
+            # 5. Dimensions (critical for registers)
+            obj_dims = dim_map.get(key, [])
+            if obj_dims:
+                parts.append("Измерения: " + ", ".join(
+                    _split_camel_case(d) for d in obj_dims))
+
+            # 6. Resources (critical for registers)
+            obj_res = res_map.get(key, [])
+            if obj_res:
+                parts.append("Ресурсы: " + ", ".join(
+                    _split_camel_case(r) for r in obj_res))
+
+            # 7. Attributes (top 15)
             obj_attrs = attr_map.get(key, [])
             if obj_attrs:
                 parts.append("Реквизиты: " + ", ".join(
                     _split_camel_case(a) for a in obj_attrs))
 
+            # 8. Tabular parts
             obj_tabs = tab_map.get(key, [])
             if obj_tabs:
                 parts.append("Табличные части: " + ", ".join(
                     _split_camel_case(t) for t in obj_tabs))
 
+            # 9. Enum values (top 10)
             obj_enums = enum_map.get(key, [])
             if obj_enums:
                 parts.append("Значения: " + ", ".join(
                     _split_camel_case(e) for e in obj_enums))
 
+            # 10. Outgoing references (what this object references)
+            obj_out_refs = out_ref_map.get(key, [])
+            if obj_out_refs:
+                parts.append("Связан с: " + ", ".join(obj_out_refs))
+
+            # 11. Incoming references (who references this object)
             obj_refs = ref_map.get(key, [])
             if obj_refs:
                 parts.append("Используется в: " + ", ".join(
                     _split_camel_case(r) for r in obj_refs))
 
-            text = ". ".join(parts)
+            # 12. Register recorders
+            obj_recorders = recorder_map.get(key, [])
+            if obj_recorders:
+                parts.append("Регистраторы: " + ", ".join(
+                    _split_camel_case(r) for r in obj_recorders))
+
+            # 13. Forms
+            obj_forms = form_map.get(key, [])
+            if obj_forms:
+                parts.append("Формы: " + ", ".join(
+                    _split_camel_case(f) for f in obj_forms))
+
+            # 14. Top export routines
+            obj_routines = routine_map.get(key, [])
+            if obj_routines:
+                parts.append("Экспортные процедуры: " + ", ".join(
+                    _split_camel_case(r) for r in obj_routines))
+
+            # 15. Context keywords from routine descriptions (cross-enrichment)
+            desc_kw = routine_desc_map.get(name, set())
+            if desc_kw:
+                # Filter out words already in parts text
+                existing = " ".join(parts).lower()
+                new_kw = [w for w in sorted(desc_kw) if w not in existing]
+                if new_kw:
+                    parts.append("Контекст: " + " ".join(new_kw[:15]))
+
+            text = "\n".join(parts)
             th = text_hash(text)
 
             if existing_obj_hashes.get(key) == th:
@@ -1058,7 +1468,7 @@ def load_all():
     if routines:
         _build_code_used_in(routines)
 
-    # 7c. Build DO_MOVEMENTS_IN from document module code
+    # 7c. Build MOVEMENTS_IN from document module code
     if routines:
         _build_movements(routines)
 

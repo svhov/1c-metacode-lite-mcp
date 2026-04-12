@@ -26,15 +26,51 @@ _CATEGORY_HINTS = {
 
 _BOOST_FACTOR = 1.3
 
-# Query expansion: only domain-specific synonyms
+# Words that signal the query is about a metadata object (not a routine)
+_OBJECT_SIGNAL_WORDS = frozenset({
+    "справочник", "справочника", "документ", "документа", "регистр", "регистра",
+    "перечисление", "перечисления", "обработка", "обработки", "отчет", "отчёт",
+    "отчета", "план", "константа", "хранение", "хранения", "архив", "архива",
+    "реестр", "реестра", "журнал", "журнала", "каталог", "каталога",
+})
+
+# Query expansion: domain-specific synonyms
 _QUERY_EXPANSIONS = {
     "штрихкод": "баркод barcode маркировка",
     "штрихкодирован": "баркод barcode маркировка",
     "наклейк": "этикетка ярлык",
     "проводк": "движение",
-    "контрагент": "поставщик покупатель клиент",
+    "контрагент": "поставщик покупатель клиент партнёр",
     "номенклатур": "товар продукция",
+    "сотрудник": "работник персонал кадры",
+    "уведомлен": "оповещение рассылка напоминание",
+    "согласован": "визирование утверждение подписание",
+    "корреспонденц": "письма почта входящие исходящие",
+    "подчинённ": "руководитель иерархия оргструктура",
+    "подчиненн": "руководитель иерархия оргструктура",
+    "график": "расписание план отпуск",
+    "статус": "состояние этап",
+    "остатк": "запас наличие склад",
+    "цен": "прайс стоимость тариф",
+    "скидк": "наценка бонус",
+    "оплат": "платёж расчёт",
+    "продаж": "реализация отгрузка",
+    "закупк": "поступление снабжение",
+    "задач": "исполнитель поручение назначение",
+    "исполнител": "задача поручение ответственный",
+    "письм": "корреспонденция почта рассылка",
+    "файл": "вложение документ хранилище",
+    "печат": "макет шаблон этикетка ценник",
+    "доступ": "право роль разрешение",
+    "движен": "проводка регистрация запись",
+    "обмен": "синхронизация выгрузка загрузка",
 }
+
+
+def _is_object_query(text: str) -> bool:
+    """Check if query is asking about a metadata object (not a routine)."""
+    words = set(text.lower().split())
+    return bool(words & _OBJECT_SIGNAL_WORDS)
 
 
 def _expand_query(text: str) -> str:
@@ -64,24 +100,84 @@ def _boost_by_category(results: list[dict], query_text: str) -> list[dict]:
     return results
 
 
-def _penalize_short_names(results: list[dict]) -> list[dict]:
-    """Penalize results with very short names — they tend to be false positives."""
+def _boost_exact_name_match(results: list[dict], query_text: str) -> list[dict]:
+    """Boost results where query words form an exact match with the object name.
+
+    If query contains a significant substring of the object name (>=60% of name words),
+    give it a strong boost. This fixes cases like "справочник контрагентов" where
+    "Контрагенты" should beat "ГруппыДоступаКонтрагентов".
+    """
+    if not results:
+        return results
+    # Extract meaningful words from query (>=4 chars, not stop words)
+    q_words = [w.lower() for w in query_text.split() if len(w) >= 4]
+    if not q_words:
+        return results
+
     for r in results:
         name = r.get("name", "") or ""
-        if len(name) < 10:
+        name_lower = name.lower()
+        # Check: how many query words are a prefix match of the full name?
+        # "контрагент" matches "контрагенты", "контрагентов" etc.
+        matches = sum(1 for qw in q_words if qw[:5] in name_lower)
+        name_word_count = max(1, len([c for c in name if c.isupper()]))  # CamelCase word count
+        coverage = matches / max(len(q_words), 1)
+
+        if coverage >= 0.5 and len(name) <= 25:
+            # Strong match with short name — this is likely THE object
+            r["score"] = round(r.get("score", 0) * 2.0, 4)
+        elif coverage >= 0.3 and len(name) <= 35:
+            # Moderate match
+            r["score"] = round(r.get("score", 0) * 1.3, 4)
+
+    results.sort(key=lambda x: x.get("score", 0), reverse=True)
+    return results
+
+
+def _penalize_short_names(results: list[dict]) -> list[dict]:
+    """Penalize results with very short names — only if they have no category boost."""
+    for r in results:
+        name = r.get("name", "") or ""
+        # Don't penalize if category matched (it's a real object, just short name)
+        if len(name) < 8 and not r.get("category"):
             r["score"] = round(r.get("score", 0) * 0.5, 4)
     results.sort(key=lambda x: x.get("score", 0), reverse=True)
     return results
 
 
 def _count_query_words(result: dict, query_text: str) -> int:
-    """Count how many query stems (first 5 chars) appear in result name/description."""
+    """Count how many query stems (first 5 chars) appear in result name/description/synonym."""
     stems = [w.lower()[:5] for w in query_text.split() if len(w) >= 4]
     name = (result.get("name", "") or "").lower()
     desc = (result.get("description", "") or "").lower()
     synonym = (result.get("synonym", "") or "").lower()
-    text = name + " " + desc + " " + synonym
+    category = (result.get("category", "") or "").lower()
+    text = name + " " + desc + " " + synonym + " " + category
     return sum(1 for s in stems if s in text)
+
+
+def _apply_stem_boost(results: list[dict], query_text: str) -> list[dict]:
+    """Boost results where query stems appear in name/description/synonym.
+
+    This compensates for weak embedding scores on exact term matches.
+    Applied AFTER hybrid scoring to lift relevant results that BM25 found
+    but embedding scored poorly.
+    """
+    if not results:
+        return results
+    stems = [w.lower()[:5] for w in query_text.split() if len(w) >= 4]
+    if not stems:
+        return results
+    for r in results:
+        matches = _count_query_words(r, query_text)
+        if matches >= 2:
+            # Strong term overlap — significant boost
+            r["score"] = round(r.get("score", 0) * (1 + 0.3 * matches), 4)
+        elif matches == 1:
+            # Weak overlap — small boost
+            r["score"] = round(r.get("score", 0) * 1.15, 4)
+    results.sort(key=lambda x: x.get("score", 0), reverse=True)
+    return results
 
 
 def _apply_dynamic_threshold(results: list[dict], query_text: str = "",
@@ -151,6 +247,7 @@ def handle_search_embedding(query: str) -> str:
     op = req.get("op", "search_all")
     text = req.get("text", req.get("query", ""))
     top_k = req.get("limit", DEFAULT_LIMIT)
+    category_filter = req.get("category", "")
 
     if not text:
         return json.dumps({"error": "Provide 'text' to search"}, ensure_ascii=False)
@@ -165,7 +262,7 @@ def handle_search_embedding(query: str) -> str:
     try:
         expanded = _expand_query(text)
         query_vec = embedder.embed_single(expanded)
-        fetch_k = max(top_k * 3, 20)
+        fetch_k = max(top_k * 5, 30)
 
         reranker = get_reranker()
 
@@ -177,27 +274,37 @@ def handle_search_embedding(query: str) -> str:
             return json.dumps({"routines": results}, ensure_ascii=False, default=str)
 
         elif op == "search_objects":
-            results = store.search_hybrid(query_vec, text, collection="objects", top_k=fetch_k)
+            results = store.search_hybrid(query_vec, text, collection="objects",
+                                          top_k=fetch_k, category_filter=category_filter)
             if reranker and results:
                 results = reranker.rerank(text, results, top_k=fetch_k)
             results = _boost_by_category(results, text)
+            results = _boost_exact_name_match(results, text)
             results = _penalize_short_names(results)
             results = _apply_dynamic_threshold(results, text, min_override=5)[:top_k]
             return json.dumps({"objects": results}, ensure_ascii=False, default=str)
 
         elif op == "search_all":
             routines = store.search_hybrid(query_vec, text, collection="routines", top_k=fetch_k)
-            objects = store.search_hybrid(query_vec, text, collection="objects", top_k=fetch_k)
+            objects = store.search_hybrid(query_vec, text, collection="objects",
+                                          top_k=fetch_k, category_filter=category_filter)
             if reranker:
                 if routines:
                     routines = reranker.rerank(text, routines, top_k=fetch_k)
                 if objects:
                     objects = reranker.rerank(text, objects, top_k=fetch_k)
             objects = _boost_by_category(objects, text)
+            objects = _boost_exact_name_match(objects, text)
 
             # Normalize scores within each group before merging
             routines = _normalize_scores(routines)
             objects = _normalize_scores(objects)
+
+            # Objects get a tiebreaker boost in search_all (1.05x base)
+            # If query explicitly mentions object types, boost more (1.5x)
+            obj_boost = 1.5 if _is_object_query(text) else 1.05
+            for o in objects:
+                o["score"] = round(o.get("score", 0) * obj_boost, 4)
 
             for r in routines:
                 r["type"] = "routine"

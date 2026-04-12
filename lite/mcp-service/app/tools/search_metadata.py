@@ -724,7 +724,7 @@ def _get_access(req):
 
 
 # ---------------------------------------------------------------------------
-# 11. get_references — USED_IN, DO_MOVEMENTS_IN
+# 11. get_references — USED_IN, MOVEMENTS_IN
 # ---------------------------------------------------------------------------
 
 def _get_references(req):
@@ -733,7 +733,7 @@ def _get_references(req):
 
     if direction == "movements":
         rows = run_query(
-            "MATCH (doc:MetadataObject)-[:DO_MOVEMENTS_IN]->(reg:MetadataObject) "
+            "MATCH (doc:MetadataObject)-[:MOVEMENTS_IN]->(reg:MetadataObject) "
             "WHERE reg.name CONTAINS $name AND reg.project_name = $p "
             "RETURN doc.name AS document, doc.category_name AS category, "
             "reg.name AS register",

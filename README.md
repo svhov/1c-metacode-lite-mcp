@@ -6,11 +6,11 @@
   <img src="https://img.shields.io/badge/Docker-Compose-2496ED?style=for-the-badge&logo=docker&logoColor=white" alt="Docker" />
 </p>
 
-<h1 align="center">1C Metacode MCP Lite</h1>
+<h1 align="center">1C Litecode MCP</h1>
 
 <p align="center">
-  <b>Превращает любую конфигурацию 1С в граф, который понимает AI</b><br/>
-  <sub>Memgraph + ONNX E5 + sqlite-vec — индексирует ERP с 638&nbsp;000 рутин в одном Docker-контейнере на 2.5 ГБ RAM</sub>
+  <b>Граф знаний вашей 1С для AI-ассистентов — локально, без LLM, в одном Docker-контейнере</b><br/>
+  <sub>Memgraph + ONNX E5 + sqlite-vec — индексирует ERP с 638&nbsp;000 рутин на 2.5 ГБ RAM</sub>
 </p>
 
 <p align="center">
@@ -41,10 +41,10 @@ Claude: → search_by_embedding "формирование проводок по 
 
 1С — это миры на сотни тысяч строк BSL, тысячи объектов метаданных, перекрёстных ссылок и форм. AI-ассистенты в этом мире **слепы**: они не понимают, какой реквизит у какого справочника, кто кого вызывает и где формируются движения. Каждый запрос «найди где обрабатывается такой-то документ» превращается в час чтения логов и ручных Cypher-запросов.
 
-**1C Metacode MCP Lite** решает это так:
+**1C Litecode MCP** решает это так:
 
 - **Парсит** отчёт по конфигурации, BSL-исходники, формы, роли, GUID-маппинг — за минуты
-- **Складывает** всё в граф Memgraph (объекты, реквизиты, вызовы, ссылки `USED_IN` и `DO_MOVEMENTS_IN`)
+- **Складывает** всё в граф Memgraph (объекты, реквизиты, вызовы, ссылки `USED_IN` и `MOVEMENTS_IN`)
 - **Индексирует** семантически через E5-base + cross-encoder ONNX-модели локально, без API
 - **Отдаёт** ассистенту через MCP-протокол два инструмента: структурный (граф) и семантический (embeddings)
 
@@ -88,8 +88,8 @@ Claude: → search_by_embedding "формирование проводок по 
 ## Демо за 60 секунд
 
 ```bash
-git clone https://github.com/svhov/1c-metacode-mcp.git
-cd 1c-metacode-mcp/lite
+git clone https://github.com/svhov/1c-litecode-mcp.git
+cd 1c-litecode-mcp/lite
 
 # Скопировать шаблон compose и подставить свои пути
 cp docker-compose.example.yml docker-compose.yml
@@ -299,7 +299,7 @@ claude mcp add do_main --transport sse http://localhost:6004/sse
 | `get_call_graph` | Кто вызывает / кого вызывает / дерево вызовов |
 | `get_predefined` | Предопределённые элементы справочников |
 | `get_access` | Права ролей |
-| `get_references` | USED_IN, DO_MOVEMENTS_IN |
+| `get_references` | USED_IN, MOVEMENTS_IN |
 | `get_subscriptions` | Подписки на события |
 | `get_http_service` | HTTP-сервисы, URL-шаблоны |
 | `resolve` | Разрешить qualified_name, GUID или префикс |
@@ -376,7 +376,7 @@ Project
                           +-- Routine --CALLS--> Routine
 
 MetadataObject --USED_IN--> MetadataObject        (типы реквизитов + BSL-код)
-MetadataObject --DO_MOVEMENTS_IN--> MetadataObject (документы -> регистры)
+MetadataObject --MOVEMENTS_IN--> MetadataObject (документы -> регистры)
 MetadataObject --GRANTS_ACCESS_TO--> MetadataObject (роли)
 ```
 
@@ -385,7 +385,7 @@ MetadataObject --GRANTS_ACCESS_TO--> MetadataObject (роли)
 1. Типы реквизитов (`СправочникСсылка.Контрагенты` в metadata)
 2. BSL-код (`Справочники.Контрагенты.НайтиПоКоду(...)` в исходниках)
 
-**`DO_MOVEMENTS_IN`** строится из паттернов `Движения.ИмяРегистра.Записать()` в модулях документов.
+**`MOVEMENTS_IN`** строится из паттернов `Движения.ИмяРегистра.Записать()` в модулях документов.
 
 ---
 
@@ -412,13 +412,13 @@ MetadataObject --GRANTS_ACCESS_TO--> MetadataObject (роли)
 
 ## Поддержать проект
 
-Если 1C Metacode MCP Lite сэкономил вам часы разбирательства в чужих конфигурациях — можно поблагодарить рублём.
+Если 1C Litecode MCP сэкономил вам часы разбирательства в чужих конфигурациях — можно поблагодарить рублём.
 
 | Сбербанк | `2202 2054 0027 9540` |
 |:---------|:----------------------|
 | Получатель | Сухов Андрей Евгеньевич |
 
-И не забудьте про **[звезду на GitHub](https://github.com/svhov/1c-metacode-mcp)** и **[подписку на YouTube](https://www.youtube.com/@svhovvv)** — это бесплатно и сильно помогает проекту находить аудиторию.
+И не забудьте про **[звезду на GitHub](https://github.com/svhov/1c-litecode-mcp)** и **[подписку на YouTube](https://www.youtube.com/@svhovvv)** — это бесплатно и сильно помогает проекту находить аудиторию.
 
 ---
 
@@ -465,7 +465,7 @@ MetadataObject --GRANTS_ACCESS_TO--> MetadataObject (роли)
     <img src="https://img.shields.io/badge/YouTube-@svhovvv-FF0000?style=flat-square&logo=youtube&logoColor=white" alt="YouTube" />
   </a>
   &nbsp;&nbsp;
-  <a href="https://github.com/svhov/1c-metacode-mcp">
+  <a href="https://github.com/svhov/1c-litecode-mcp">
     <img src="https://img.shields.io/badge/GitHub-Поставить_★-181717?style=flat-square&logo=github&logoColor=white" alt="GitHub" />
   </a>
 </p>

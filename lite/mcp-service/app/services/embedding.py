@@ -51,8 +51,10 @@ class OnnxEmbedder:
         self._dimension = None
         self._query_prefix = query_prefix
         self._passage_prefix = passage_prefix
-        log.info("ONNX embedder loaded from %s (prefix=%s)", model_path,
-                 "E5" if query_prefix else "none")
+        # Detect max token length: nomic=1024 (capped for stable RAM), e5=512
+        self._max_length = 1024 if "nomic" in model_path.lower() else 512
+        log.info("ONNX embedder loaded from %s (prefix=%s, max_tokens=%d)",
+                 model_path, query_prefix.strip() or "none", self._max_length)
 
     @property
     def dimension(self) -> int:
@@ -100,21 +102,21 @@ class OnnxEmbedder:
         return ''.join(cleaned)
 
     def _safe_encode(self, text: str) -> tuple[list[int], list[int]]:
-        """Encode single text safely. Returns (ids, attention_mask), truncated to 512."""
+        """Encode single text safely. Returns (ids, attention_mask), truncated to max_length."""
         cleaned = self._clean_text(text)
+        ml = self._max_length
         try:
             enc = self._tokenizer.encode(cleaned)
-            ids = list(enc.ids)[:512]
-            mask = list(enc.attention_mask)[:512]
+            ids = list(enc.ids)[:ml]
+            mask = list(enc.attention_mask)[:ml]
         except Exception:
             log.warning("Tokenization failed, using fallback for: %.40s...", text)
-            # Use ASCII-only version as last resort
             ascii_text = cleaned.encode("ascii", errors="ignore").decode()
             if not ascii_text.strip():
                 ascii_text = "empty"
             enc = self._tokenizer.encode(ascii_text)
-            ids = list(enc.ids)[:512]
-            mask = list(enc.attention_mask)[:512]
+            ids = list(enc.ids)[:ml]
+            mask = list(enc.attention_mask)[:ml]
         return ids, mask
 
     def embed_batch(self, texts: list[str], batch_size: int = 64,
@@ -496,18 +498,40 @@ class SqliteVecStore:
 
     def search_hybrid(self, query_vector: list[float], query_text: str,
                        collection: str, top_k: int = 7,
-                       embedding_weight: float = 0.8) -> list[dict]:
-        """Hybrid search: combine embedding KNN with FTS5 BM25."""
+                       embedding_weight: float = 0.8,
+                       category_filter: str = "") -> list[dict]:
+        """Hybrid search: combine embedding KNN with FTS5 BM25.
+
+        If category_filter is set, only return results matching that category.
+        """
+        # Fetch more candidates when filtering by category
+        fetch_mult = 5 if category_filter else 3
+
         # 1. Embedding search (primary)
-        emb_results = self.search(query_vector, collection, top_k=top_k * 3)
+        emb_results = self.search(query_vector, collection, top_k=top_k * fetch_mult)
+        if category_filter:
+            emb_results = [r for r in emb_results if r.get("category") == category_filter]
         emb_scores = {r["key"]: r["score"] for r in emb_results}
         emb_meta = {r["key"]: r for r in emb_results}
 
-        # 2. FTS5 search — filter stop words and require min 4 chars
+        # 2. FTS5 search — filter stop words, add Russian stem variants
         words = [w.strip() for w in query_text.split()
                  if len(w.strip()) >= 4 and w.strip().lower() not in self._STOP_WORDS]
         if words:
-            fts_query = " OR ".join(words)
+            # Add stem variants for Russian morphology (strip common suffixes)
+            stems = set()
+            for w in words:
+                wl = w.lower()
+                for suffix in ("ами", "ями", "ого", "его", "ому", "ему",
+                               "ов", "ев", "ах", "ях", "ом", "ем", "ий",
+                               "ей", "ам", "ям", "ой", "ый", "ая", "яя",
+                               "ие", "ые", "ию", "ых", "их"):
+                    if wl.endswith(suffix) and len(wl) - len(suffix) >= 4:
+                        stem = wl[:-len(suffix)]
+                        stems.add(stem)
+                        break
+            all_terms = list(set(words) | stems)
+            fts_query = " OR ".join(all_terms)
             try:
                 fts_rows = self._conn.execute(f"""
                     SELECT vi.key, rank
@@ -516,10 +540,21 @@ class SqliteVecStore:
                     WHERE vec_fts MATCH ?
                       AND vi.collection = ?
                     ORDER BY rank
-                    LIMIT {top_k * 3}
+                    LIMIT {top_k * 5}
                 """, (fts_query, collection)).fetchall()
             except Exception:
                 fts_rows = []
+
+            if category_filter:
+                # Filter FTS results by category
+                filtered_fts = []
+                for key, rank in fts_rows:
+                    cat_row = self._conn.execute(
+                        "SELECT category FROM vec_items WHERE key = ?", (key,)
+                    ).fetchone()
+                    if cat_row and cat_row[0] == category_filter:
+                        filtered_fts.append((key, rank))
+                fts_rows = filtered_fts
 
             if fts_rows:
                 # Normalize BM25 ranks to 0..1, penalize short names
@@ -555,10 +590,14 @@ class SqliteVecStore:
         for key in all_keys:
             e_score = emb_scores.get(key, 0)
             f_score = fts_scores.get(key, 0)
-            # If BM25 has no match, use embedding score as-is (no penalty)
-            if f_score > 0:
+            if e_score > 0 and f_score > 0:
+                # Both found — weighted combination
                 final = e_score * emb_w + f_score * bm25_w
+            elif f_score > 0:
+                # BM25 only — use BM25 score directly (not penalized by emb_w)
+                final = f_score
             else:
+                # Embedding only — use as-is
                 final = e_score
             meta = emb_meta.get(key, {})
             if not meta and key in fts_scores:

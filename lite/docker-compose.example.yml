@@ -1,4 +1,4 @@
-name: 1c-metacode-lite
+name: 1c-litecode
 
 # ─────────────────────────────────────────────────────────────────────
 # Шаблон docker-compose для 1C Metacode MCP Lite.
@@ -38,7 +38,7 @@ services:
 
   # ── Пример: Документооборот (основная конфигурация) ──────────────
   1c-metacode-do_main:
-    image: svhov/1c-metacode-lite
+    image: svhov/1c-litecode
     build: ./mcp-service
     restart: unless-stopped
     ports:
@@ -72,7 +72,7 @@ services:
   # Раскомментируй и подставь свои пути, чтобы добавить второй проект.
   #
   # 1c-metacode-do_ext:
-  #   image: svhov/1c-metacode-lite
+  #   image: svhov/1c-litecode
   #   build: ./mcp-service
   #   restart: unless-stopped
   #   ports:
@@ -98,7 +98,7 @@ services:
   # pipeline ограничивает RAM ~2.5 ГБ и поддерживает resume при рестарте.
   #
   # 1c-metacode-erp_main:
-  #   image: svhov/1c-metacode-lite
+  #   image: svhov/1c-litecode
   #   build: ./mcp-service
   #   restart: unless-stopped
   #   ports:
