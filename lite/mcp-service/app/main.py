@@ -171,13 +171,33 @@ def _heartbeat_logger():
 
 
 def _load_data_background():
-    """Load data in background, then start the heartbeat logger."""
+    """Load data in background, then start the heartbeat logger.
+
+    If embedding was performed (embedded_count > 0), the process exits
+    to release fragmented memory. Docker restart policy brings it back
+    and the second start skips embedding (all hashes match) → clean RAM.
+    """
+    embedded_count = 0
     try:
-        load_all()
+        embedded_count = load_all() or 0
     except Exception:
         log.exception("Data load failed")
-    # Always start heartbeat afterwards — even on failure, users should see
-    # that the MCP server itself is still alive and serving requests.
+        # Don't restart on failure — let heartbeat show the server is alive
+        # Docker's restart backoff will handle transient issues
+
+    # Auto-restart after heavy embedding to release fragmented memory.
+    # os._exit(0) is needed because sys.exit() only raises SystemExit
+    # which doesn't terminate from a daemon thread (uvicorn holds main).
+    # Only restart if heavy embedding (>500 items) to avoid restart loops
+    # on minor cross-enrichment hash changes
+    if embedded_count > 500:
+        log.info("Heavy embedding done (%d items). Restarting to release memory...",
+                 embedded_count)
+        time.sleep(2)  # Let log flush
+        import os as _os
+        _os._exit(0)  # Docker restart: unless-stopped will bring us back
+
+    # Start heartbeat (only reached on second start when everything is skipped)
     log.info("Data load finished — starting heartbeat (every %ds)",
              HEARTBEAT_LOG_INTERVAL)
     threading.Thread(target=_heartbeat_logger, daemon=True).start()

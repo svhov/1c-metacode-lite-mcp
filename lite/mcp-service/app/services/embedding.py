@@ -578,9 +578,30 @@ class SqliteVecStore:
         else:
             fts_scores = {}
 
+        # 2b. Direct name lookup — find objects whose name matches query words.
+        # Catches cases where BM25 misses due to TF-IDF dilution on large corpora.
+        # Only for "objects" collection (small, <10K). Skipped for routines (90K+).
+        name_scores = {}
+        q_words_lower = [w.strip().lower() for w in query_text.split()
+                         if len(w.strip()) >= 4 and w.strip().lower() not in self._STOP_WORDS]
+        if q_words_lower and collection == "objects":
+            all_names = self._conn.execute(
+                "SELECT key, name FROM vec_items WHERE collection = ?",
+                (collection,)
+            ).fetchall()
+            for key, name in all_names:
+                name_lower = name.lower()
+                nm = sum(1 for w in q_words_lower if w[:5] in name_lower)
+                if nm == 0:
+                    continue
+                name_word_count = max(1, sum(1 for c in name if c.isupper()))
+                precision = nm / name_word_count
+                if precision >= 0.5:
+                    name_scores[key] = precision
+
         # 3. Combine scores with adaptive weights
         # If embedding found strong hits, trust it more; otherwise lean on BM25
-        all_keys = set(emb_scores.keys()) | set(fts_scores.keys())
+        all_keys = set(emb_scores.keys()) | set(fts_scores.keys()) | set(name_scores.keys())
         max_emb = max(emb_scores.values()) if emb_scores else 0
         if max_emb > 0.2:
             emb_w, bm25_w = 0.85, 0.15  # strong embedding — BM25 as tiebreaker only
@@ -590,15 +611,16 @@ class SqliteVecStore:
         for key in all_keys:
             e_score = emb_scores.get(key, 0)
             f_score = fts_scores.get(key, 0)
+            n_score = name_scores.get(key, 0)
             if e_score > 0 and f_score > 0:
-                # Both found — weighted combination
                 final = e_score * emb_w + f_score * bm25_w
             elif f_score > 0:
-                # BM25 only — use BM25 score directly (not penalized by emb_w)
                 final = f_score
             else:
-                # Embedding only — use as-is
                 final = e_score
+            # Name match bonus: direct name precision adds to score
+            if n_score > 0:
+                final = max(final, n_score) + n_score * 0.5
             meta = emb_meta.get(key, {})
             if not meta and key in fts_scores:
                 # FTS found it but embedding didn't — get metadata from DB

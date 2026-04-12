@@ -875,6 +875,25 @@ def _build_embeddings():
         log.warning("Embedding service not available, skipping")
         return
 
+    # Fast path: if vector store counts match Memgraph, skip heavy embedding loop.
+    # This avoids querying 92K rows just to check hashes on every restart.
+    if not FULL_METADATA_RELOAD:
+        routine_count_graph = run_query(
+            "MATCH (r:Routine {project_name: $p}) RETURN count(r) AS cnt",
+            {"p": PROJECT_NAME})
+        obj_count_graph = run_query(
+            "MATCH (mo:MetadataObject {project_name: $p}) RETURN count(mo) AS cnt",
+            {"p": PROJECT_NAME})
+        r_cnt = routine_count_graph[0]["cnt"] if routine_count_graph else 0
+        o_cnt = obj_count_graph[0]["cnt"] if obj_count_graph else 0
+        r_vec = store.count("routines")
+        o_vec = store.count("objects")
+
+        if r_vec >= r_cnt and o_vec > 0 and r_cnt > 0:
+            log.info("Embeddings up-to-date: routines=%d/%d, objects=%d "
+                     "(skipping rebuild)", r_vec, r_cnt, o_vec)
+            return 0
+
     # Ensure subsystem map is populated (may be empty if metadata was already loaded)
     if not _subsystem_map:
         metadata_files = [
@@ -917,13 +936,15 @@ def _build_embeddings():
             if obj_label not in lst and len(lst) < 5:
                 lst.append(obj_label)
 
+    embedded = 0
+    embedded_o = 0
+
     if rows:
         total = len(rows)
         existing_hashes = store.get_all_hashes("routines")
         current_keys = set()
         pending_items: list[tuple[str, dict, str, str]] = []
         pending_texts: list[str] = []
-        embedded = 0
         skipped = 0
         seen = 0
 
@@ -1389,8 +1410,10 @@ def _build_embeddings():
         log.info("Objects done: total=%d, embedded=%d, unchanged=%d, removed=%d",
                  total_obj, embedded_o, skipped_o, removed_o)
 
-    log.info("Embedding complete: %d routines, %d objects in vector store",
-             store.count("routines"), store.count("objects"))
+    total_embedded = embedded + embedded_o
+    log.info("Embedding complete: %d routines, %d objects in vector store (embedded this run: %d)",
+             store.count("routines"), store.count("objects"), total_embedded)
+    return total_embedded
 
 
 def load_all():
@@ -1410,9 +1433,10 @@ def load_all():
         cnt = result[0]["cnt"] if result else 0
         log.info("[OK] Project metadata already loaded (%d objects)", cnt)
         # Build embeddings if enabled (models + sqlite-vec + vectors)
+        embedded_count = 0
         if ENABLE_EMBEDDING:
-            _build_embeddings()
-        return
+            embedded_count = _build_embeddings() or 0
+        return embedded_count
 
     if FULL_METADATA_RELOAD:
         _clear_project()
@@ -1473,8 +1497,9 @@ def load_all():
         _build_movements(routines)
 
     # 8. Build embeddings (optional)
+    embedded_count = 0
     if ENABLE_EMBEDDING:
-        _build_embeddings()
+        embedded_count = _build_embeddings() or 0
 
     # Final stats
     stats = run_query("""
@@ -1485,3 +1510,4 @@ def load_all():
     log.info("Load complete. Stats:")
     for s in stats:
         log.info("  %s: %d", s["label"], s["cnt"])
+    return embedded_count

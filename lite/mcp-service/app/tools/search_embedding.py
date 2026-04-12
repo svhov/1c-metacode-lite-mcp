@@ -101,15 +101,15 @@ def _boost_by_category(results: list[dict], query_text: str) -> list[dict]:
 
 
 def _boost_exact_name_match(results: list[dict], query_text: str) -> list[dict]:
-    """Boost results where query words form an exact match with the object name.
+    """Boost results where query words closely match the object name.
 
-    If query contains a significant substring of the object name (>=60% of name words),
-    give it a strong boost. This fixes cases like "справочник контрагентов" where
-    "Контрагенты" should beat "ГруппыДоступаКонтрагентов".
+    Shorter names with high query overlap get stronger boost.
+    "Контрагенты" (13 chars, 1 CamelCase word) beats
+    "ГруппыДоступаКонтрагентов" (25 chars, 3 CamelCase words) for
+    query "справочник контрагентов".
     """
     if not results:
         return results
-    # Extract meaningful words from query (>=4 chars, not stop words)
     q_words = [w.lower() for w in query_text.split() if len(w) >= 4]
     if not q_words:
         return results
@@ -117,18 +117,26 @@ def _boost_exact_name_match(results: list[dict], query_text: str) -> list[dict]:
     for r in results:
         name = r.get("name", "") or ""
         name_lower = name.lower()
-        # Check: how many query words are a prefix match of the full name?
-        # "контрагент" matches "контрагенты", "контрагентов" etc.
         matches = sum(1 for qw in q_words if qw[:5] in name_lower)
-        name_word_count = max(1, len([c for c in name if c.isupper()]))  # CamelCase word count
+        if matches == 0:
+            continue
+
+        # CamelCase word count in name (upper chars = word boundaries)
+        name_words = max(1, sum(1 for c in name if c.isupper()))
         coverage = matches / max(len(q_words), 1)
 
-        if coverage >= 0.5 and len(name) <= 25:
-            # Strong match with short name — this is likely THE object
-            r["score"] = round(r.get("score", 0) * 2.0, 4)
-        elif coverage >= 0.3 and len(name) <= 35:
-            # Moderate match
-            r["score"] = round(r.get("score", 0) * 1.3, 4)
+        # Precision: what fraction of name words are matched by query?
+        # "Контрагенты" (1 word, 1 match) = precision 1.0
+        # "ГруппыДоступаКонтрагентов" (3 words, 1 match) = precision 0.33
+        precision = matches / name_words
+
+        if precision >= 0.8 and coverage >= 0.3:
+            # Near-exact match (name ≈ query) — strongest boost
+            r["score"] = round(r.get("score", 0) * 3.0, 4)
+        elif precision >= 0.5 and coverage >= 0.3:
+            r["score"] = round(r.get("score", 0) * 1.5, 4)
+        elif coverage >= 0.3:
+            r["score"] = round(r.get("score", 0) * 1.2, 4)
 
     results.sort(key=lambda x: x.get("score", 0), reverse=True)
     return results

@@ -345,7 +345,7 @@ def run_suite(tests, port, server_name):
         })
 
     # Resource metrics
-    container_name = f"1c-litecode-litecode-{server_name.lower().replace('_', '_')}-1"
+    container_name = f"litecode-group-litecode-{server_name.lower().replace('_', '_')}-1"
     ram_mb = get_container_memory(container_name)
 
     # Try to find data path for DB size
